@@ -1,0 +1,40 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7b8a69dead1d0c343a2a67d1e8aa2bf8, type: 3}
+  m_Name: PBR_SGTemplate
+  m_EditorClassIdentifier: 
+  templateName: PBR_SG
+  targetShader: {fileID: 4800000, guid: bb809bfb606652748b652137cf60d12c, type: 3}
+  texturePropertyMappings:
+  - shaderPropertyName: _BaseMap
+    textureSuffixes:
+    - _m_BaseColor
+    isNormalMap: 0
+  - shaderPropertyName: _ARMMap
+    textureSuffixes:
+    - _m_ARM
+    isNormalMap: 0
+  - shaderPropertyName: _NormalMap
+    textureSuffixes:
+    - _m_Normal
+    isNormalMap: 1
+  floatParameters:
+  - propertyName: _BlendModePreserveSpecular
+    value: 0
+  - propertyName: _ReceiveShadows
+    value: 0
+  - propertyName: _ARM_ON
+    value: 1
+  intParameters: []
+  colorParameters: []
+  enableKeywords: []
+  disableKeywords: []

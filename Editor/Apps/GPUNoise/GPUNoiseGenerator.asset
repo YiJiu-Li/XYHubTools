@@ -1,0 +1,39 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 035fab005eb4f144fa7d201d096c532a, type: 3}
+  m_Name: GPUNoiseGenerator
+  m_EditorClassIdentifier: 
+  noiseComputeShader: {fileID: 7200000, guid: 3e288a6ba70b107408606421d0227dfb, type: 3}
+  noiseType: 0
+  resolution: 512
+  scale: 10
+  offset: {x: 0, y: 0}
+  seed: 0
+  octaves: 4
+  persistence: 0.5
+  lacunarity: 2
+  invert: 0
+  tintColor: {r: 1, g: 1, b: 1, a: 1}
+  seamless: 0
+  contrast: 1
+  brightness: 0
+  normalStrength: 1
+  enableDomainWarp: 0
+  warpStrength: 0.5
+  warpScale: 5
+  warpIterations: 2
+  enableGradientMap: 0
+  gradientTexture: {fileID: 0}
+  enableBlend: 0
+  blendTexture: {fileID: 0}
+  blendMode: 0
+  blendFactor: 0.5

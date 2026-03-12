@@ -56,6 +56,12 @@ public class AssetGUIDRegeneratorPanel : IXYPanel
         DrawModeDesc();
 
         EditorGUILayout.EndScrollView();
+
+        XYEditorGUI.DrawFooter(
+            "作者: 依旧 | GitHub: https://github.com/YiJiu-Li",
+            "https://github.com/YiJiu-Li"
+        );
+        EditorGUILayout.Space(10);
     }
 
     // ═══════════════════════════════════════════════════════════════════════

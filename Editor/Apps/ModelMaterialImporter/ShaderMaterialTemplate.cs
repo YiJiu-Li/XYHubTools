@@ -42,6 +42,39 @@ namespace YZJ
         [Tooltip("需要禁用的Keyword")]
         public List<string> disableKeywords = new List<string>();
 
+        [Header("渲染类型")]
+        [Tooltip("材质的RenderType标签（None=使用Shader默认值，不覆盖）")]
+        public MaterialRenderType renderType = MaterialRenderType.None;
+
+        [Header("Surface Options（Ignore=不设置此项）")]
+        [Tooltip("工作流模式：Specular / Metallic（对应 _WorkflowMode）")]
+        public TemplateWorkflowMode workflowMode = TemplateWorkflowMode.Ignore;
+
+        [Tooltip("表面类型：Opaque / Transparent（对应 _Surface）")]
+        public TemplateSurfaceType surfaceType = TemplateSurfaceType.Ignore;
+
+        [Tooltip("渲染面：Front 正面 / Back 背面 / Both 双面（对应 _Cull）")]
+        public TemplateRenderFace renderFace = TemplateRenderFace.Ignore;
+
+        [Tooltip("深度写入模式：Auto / ForceEnabled / ForceDisabled（对应 _ZWriteControl）")]
+        public TemplateDepthWrite depthWrite = TemplateDepthWrite.Ignore;
+
+        [Tooltip("深度测试函数（对应 _ZTest）")]
+        public TemplateDepthTest depthTest = TemplateDepthTest.Ignore;
+
+        [Tooltip("Alpha 裁切开关（Enabled 时同步写入 _AlphaClip=1 并启用 _ALPHATEST_ON）")]
+        public TemplateToggle alphaClipping = TemplateToggle.Ignore;
+
+        [Tooltip("Alpha 裁切阈值（仅 Alpha Clipping = Enabled 时生效，对应 _Cutoff）")]
+        [Range(0f, 1f)]
+        public float alphaCutoff = 0.5f;
+
+        [Tooltip("投射阴影开关（通过 SetShaderPassEnabled 控制 ShadowCaster Pass）")]
+        public TemplateToggle castShadows = TemplateToggle.Ignore;
+
+        [Tooltip("接收阴影开关（对应 _ReceiveShadows）")]
+        public TemplateToggle receiveShadows = TemplateToggle.Ignore;
+
         /// <summary>
         /// 创建默认的URP/Lit模板
         /// </summary>
@@ -154,6 +187,77 @@ namespace YZJ
 
             return template;
         }
+    }
+
+    /// <summary>
+    /// 材质RenderType枚举
+    /// </summary>
+    public enum MaterialRenderType
+    {
+        [Tooltip("不覆盖，使用Shader默认值")]
+        None,
+        Opaque,
+        Transparent,
+        TransparentCutout,
+        Background,
+        Overlay,
+    }
+
+    /// <summary>工作流模式（对应 _WorkflowMode）</summary>
+    public enum TemplateWorkflowMode
+    {
+        Ignore = -1,
+        Specular = 0,
+        Metallic = 1,
+    }
+
+    /// <summary>表面类型（对应 _Surface）</summary>
+    public enum TemplateSurfaceType
+    {
+        Ignore = -1,
+        Opaque = 0,
+        Transparent = 1,
+    }
+
+    /// <summary>渲染面（对应 _Cull；Front=显示正面/剔除背面，Back=显示背面/剔除正面，Both=双面）</summary>
+    public enum TemplateRenderFace
+    {
+        Ignore = -1,
+        Front = 0, // _Cull = 2 (CullMode.Back)
+        Back = 1, // _Cull = 1 (CullMode.Front)
+        Both = 2, // _Cull = 0 (CullMode.Off)
+    }
+
+    /// <summary>深度写入控制（对应 _ZWriteControl）</summary>
+    public enum TemplateDepthWrite
+    {
+        Ignore = -1,
+        Auto = 0,
+        ForceEnabled = 1,
+        ForceDisabled = 2,
+    }
+
+    /// <summary>深度测试函数（对应 _ZTest，使用 UnityEngine.Rendering.CompareFunction 值）</summary>
+    public enum TemplateDepthTest
+    {
+        Ignore = -1,
+        Disabled = 0,
+        Never = 1,
+        Less = 2,
+        Equal = 3,
+        LessEqual = 4,
+        Greater = 5,
+        NotEqual = 6,
+        GreaterEqual = 7,
+        Always = 8,
+    }
+
+    /// <summary>三态开关：Ignore=不设置，Disabled=关，Enabled=开</summary>
+    public enum TemplateToggle
+    {
+        Ignore = -1,
+        Disabled = 0,
+        Enabled = 1,
     }
 
     /// <summary>

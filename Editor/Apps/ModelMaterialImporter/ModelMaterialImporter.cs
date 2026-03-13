@@ -194,6 +194,93 @@ namespace YZJ
                     material.DisableKeyword(keyword);
                 }
             }
+
+            // 设置RenderType标签
+            if (template.renderType != MaterialRenderType.None)
+            {
+                material.SetOverrideTag("RenderType", template.renderType.ToString());
+            }
+
+            // ── Surface Options ────────────────────────────────────────────
+
+            // Workflow Mode (_WorkflowMode: 0=Specular, 1=Metallic)
+            if (template.workflowMode != TemplateWorkflowMode.Ignore &&
+                material.HasProperty("_WorkflowMode"))
+            {
+                material.SetFloat("_WorkflowMode", (int)template.workflowMode);
+            }
+
+            // Surface Type (_Surface: 0=Opaque, 1=Transparent)
+            if (template.surfaceType != TemplateSurfaceType.Ignore &&
+                material.HasProperty("_Surface"))
+            {
+                material.SetFloat("_Surface", (int)template.surfaceType);
+            }
+
+            // Render Face (_Cull: Front→2, Back→1, Both→0)
+            if (template.renderFace != TemplateRenderFace.Ignore &&
+                material.HasProperty("_Cull"))
+            {
+                int cullValue = template.renderFace switch
+                {
+                    TemplateRenderFace.Front => 2,   // CullMode.Back  = 显示正面
+                    TemplateRenderFace.Back  => 1,   // CullMode.Front = 显示背面
+                    TemplateRenderFace.Both  => 0,   // CullMode.Off   = 双面
+                    _                        => 2,
+                };
+                material.SetFloat("_Cull", cullValue);
+            }
+
+            // Depth Write (_ZWriteControl: 0=Auto, 1=ForceEnabled, 2=ForceDisabled)
+            if (template.depthWrite != TemplateDepthWrite.Ignore &&
+                material.HasProperty("_ZWriteControl"))
+            {
+                material.SetFloat("_ZWriteControl", (int)template.depthWrite);
+            }
+
+            // Depth Test (_ZTest: Never=1 … Always=8)
+            if (template.depthTest != TemplateDepthTest.Ignore &&
+                material.HasProperty("_ZTest"))
+            {
+                material.SetFloat("_ZTest", (int)template.depthTest);
+            }
+
+            // Alpha Clipping (_AlphaClip + keyword _ALPHATEST_ON + _Cutoff)
+            if (template.alphaClipping != TemplateToggle.Ignore)
+            {
+                bool enabled = template.alphaClipping == TemplateToggle.Enabled;
+                if (material.HasProperty("_AlphaClip"))
+                    material.SetFloat("_AlphaClip", enabled ? 1f : 0f);
+                if (enabled)
+                {
+                    material.EnableKeyword("_ALPHATEST_ON");
+                    if (material.HasProperty("_Cutoff"))
+                        material.SetFloat("_Cutoff", template.alphaCutoff);
+                }
+                else
+                {
+                    material.DisableKeyword("_ALPHATEST_ON");
+                }
+            }
+
+            // Cast Shadows (通过 ShadowCaster Pass 开关控制)
+            if (template.castShadows != TemplateToggle.Ignore)
+            {
+                material.SetShaderPassEnabled("ShadowCaster",
+                    template.castShadows == TemplateToggle.Enabled);
+            }
+
+            // Receive Shadows (_ReceiveShadows + keyword _RECEIVE_SHADOWS_OFF)
+            if (template.receiveShadows != TemplateToggle.Ignore)
+            {
+                bool recv = template.receiveShadows == TemplateToggle.Enabled;
+                if (material.HasProperty("_ReceiveShadows"))
+                    material.SetFloat("_ReceiveShadows", recv ? 1f : 0f);
+                if (recv)
+                    material.DisableKeyword("_RECEIVE_SHADOWS_OFF");
+                else
+                    material.EnableKeyword("_RECEIVE_SHADOWS_OFF");
+            }
         }
 
         /// <summary>

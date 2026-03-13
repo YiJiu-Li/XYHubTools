@@ -46,6 +46,10 @@ namespace YZJ
         [Tooltip("材质的RenderType标签（None=使用Shader默认值，不覆盖）")]
         public MaterialRenderType renderType = MaterialRenderType.None;
 
+        [Header("模型导入设置")]
+        [Tooltip("材质 Location 模式：InPrefab=嵌入模型 / External=外部文件（Ignore=不修改）")]
+        public TemplateMaterialLocation materialLocation = TemplateMaterialLocation.Ignore;
+
         [Header("Surface Options（Ignore=不设置此项）")]
         [Tooltip("工作流模式：Specular / Metallic（对应 _WorkflowMode）")]
         public TemplateWorkflowMode workflowMode = TemplateWorkflowMode.Ignore;
@@ -201,6 +205,16 @@ namespace YZJ
         TransparentCutout,
         Background,
         Overlay,
+    }
+
+    /// <summary>材质 Location 模式（对应 ModelImporter.materialLocation）</summary>
+    public enum TemplateMaterialLocation
+    {
+        Ignore    = -1,
+        /// <summary>材质嵌入模型内（Use Embedded Materials）</summary>
+        InPrefab  = 0,
+        /// <summary>材质作为外部Asset（Use External Materials）</summary>
+        External  = 1,
     }
 
     /// <summary>工作流模式（对应 _WorkflowMode）</summary>

@@ -1,6 +1,6 @@
 {
     "name": "com.yzj.xyhubtools",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "displayName": "XY Hub Tools",
     "description": "Unity 编辑器工具集合，包含材质透明度动画创建器、模型材质导入器、GPU噪声生成器等实用工具。",
     "unity": "2021.3",

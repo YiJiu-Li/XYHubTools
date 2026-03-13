@@ -42,6 +42,18 @@ namespace YZJ
                 if (modelImporter == null)
                     return;
 
+                // 设置材质 Location 模式
+                var tmpl = CurrentTemplate;
+                if (tmpl != null && tmpl.materialLocation != TemplateMaterialLocation.Ignore)
+                {
+                    var target = (ModelImporterMaterialLocation)(int)tmpl.materialLocation;
+                    if (modelImporter.materialLocation != target)
+                    {
+                        modelImporter.materialLocation = target;
+                        modelImporter.SaveAndReimport();
+                    }
+                }
+
                 // 提取材质
                 ExtractMaterials(modelPath, materialsFolder);
 

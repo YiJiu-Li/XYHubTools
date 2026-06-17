@@ -5,6 +5,14 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.2] - 2026-06-17
+
+### 修复
+- 🐛 修复 `printJson` 对匿名对象、字典、数组等普通 C# 对象输出 `{}` 的问题
+- 🐛 `unity_get_component` 支持 `Camera` 和 `UnityEngine.Camera` 等组件类型写法
+
+---
+
 ## [1.2.1] - 2026-06-17
 
 ### 修复

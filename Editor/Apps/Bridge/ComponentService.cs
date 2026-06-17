@@ -32,7 +32,10 @@ namespace Framework.XYEditor.Bridge
             Component[] components;
             if (!string.IsNullOrEmpty(typeName))
             {
-                var comp = go.GetComponent(typeName);
+                var wantedType = ResolveComponentType(typeName);
+                var comp = wantedType != null
+                    ? go.GetComponent(wantedType)
+                    : go.GetComponent(typeName);
                 if (comp == null)
                     return "{\"error\":\"Component not found: "
                         + typeName.Replace("\"", "\\\"")

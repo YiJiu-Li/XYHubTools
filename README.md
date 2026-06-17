@@ -70,7 +70,7 @@
 ### 方法 3: 指定版本安装
 
 ```json
-"com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git?path=/Assets/XYHubTools#v1.2.1"
+"com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git?path=/Assets/XYHubTools#v1.2.2"
 ```
 
 ## 🚀 快速开始
@@ -142,6 +142,10 @@ VS Code 使用 `.vscode/mcp.json` 的 SSE 配置。需要在 Bridge 面板启动
 欢迎提交 Issue 和 Pull Request！
 
 ## 📝 更新日志
+
+### v1.2.2 (2026-06-17)
+- 🐛 修复 `printJson` 对匿名对象和字典输出 `{}` 的问题
+- 🐛 `unity_get_component` 支持 `UnityEngine.Camera` 等完整组件类型名
 
 ### v1.2.1 (2026-06-17)
 - 🐛 当前 Unity 项目可自动写入独立 Codex MCP server，避免多个项目共用固定 cwd

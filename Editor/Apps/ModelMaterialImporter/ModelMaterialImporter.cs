@@ -487,7 +487,7 @@ namespace YZJ
 
         #region 手动处理菜单
 
-        [MenuItem("Assets/XZ工具/处理模型材质", false, 100)]
+        [MenuItem("Assets/XY Hub Tools/Model Material Importer/处理模型材质", false, 100)]
         private static void ProcessSelectedModels()
         {
             foreach (var obj in Selection.objects)
@@ -500,7 +500,7 @@ namespace YZJ
             }
         }
 
-        [MenuItem("Assets/XZ工具/处理模型材质", true)]
+        [MenuItem("Assets/XY Hub Tools/Model Material Importer/处理模型材质", true)]
         private static bool ProcessSelectedModelsValidate()
         {
             foreach (var obj in Selection.objects)

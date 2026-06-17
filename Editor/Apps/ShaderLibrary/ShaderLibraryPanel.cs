@@ -57,7 +57,7 @@ namespace Framework.XYEditor.ShaderLibrary
         [Serializable]
         private class ShaderNodeList
         {
-            public List<ShaderNode> items;
+            public List<ShaderNode> items = new();
         }
 
         private class DownloadGroup

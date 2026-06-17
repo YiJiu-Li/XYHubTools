@@ -59,7 +59,7 @@ namespace Framework.GPUNoise
     /// <summary>
     /// GPU噪声生成器 - 在GPU上高效生成各种类型的噪声纹理
     /// </summary>
-    [CreateAssetMenu(fileName = "GPUNoiseGenerator", menuName = "噪声图工具/GPU Noise Generator")]
+    [CreateAssetMenu(fileName = "GPUNoiseGenerator", menuName = "XY Hub Tools/GPU Noise Generator")]
     public class GPUNoiseGenerator : ScriptableObject
     {
         [Header("Compute Shader")]

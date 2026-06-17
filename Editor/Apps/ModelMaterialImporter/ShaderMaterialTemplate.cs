@@ -9,7 +9,7 @@ namespace YZJ
     /// </summary>
     [CreateAssetMenu(
         fileName = "NewShaderTemplate",
-        menuName = "XZ工具/Shader材质模板",
+        menuName = "XY Hub Tools/Shader材质模板",
         order = 100
     )]
     public class ShaderMaterialTemplate : ScriptableObject

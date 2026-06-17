@@ -11,7 +11,6 @@ namespace YZJ
     /// </summary>
     public class ModelMaterialImporterWindow : XYEditorWindowBase<ModelMaterialImporterPanel>
     {
-        [MenuItem("依旧/XZ工具/模型材质导入设置", false, 200)]
         public static void ShowWindow()
         {
             var window = GetWindow<ModelMaterialImporterWindow>("模型材质导入设置");

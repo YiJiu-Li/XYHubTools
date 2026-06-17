@@ -153,7 +153,7 @@ public class ModelMaterialImporterPanel : IXYPanel
                         + "1. 创建或选择一个Shader模板\n"
                         + "2. 在模板中配置贴图属性映射\n"
                         + "3. 配置默认Float/Color参数和Keyword\n"
-                        + "4. 右键模型 → XZ工具 → 处理模型材质",
+                        + "4. 右键模型 → XY Hub Tools → Model Material Importer → 处理模型材质",
                     MessageType.None
                 );
             }

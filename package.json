@@ -1,11 +1,11 @@
 {
     "name": "com.yzj.xyhubtools",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "displayName": "XY Hub Tools",
-    "description": "Unity 编辑器工具集合，包含材质透明度动画创建器、模型材质导入器、GPU噪声生成器等实用工具。",
+    "description": "Unity 编辑器工具集合 + AI MCP Bridge。包含材质透明度动画、GPU噪声、模型导入、MCP桥接(AI Agent操控Unity)等工具。",
     "unity": "2021.3",
-    "documentationUrl": "https://github.com/YiJiu-Li/XYHubTools#readme",
-    "changelogUrl": "https://github.com/YiJiu-Li/XYHubTools/releases",
+    "documentationUrl": "https://github.com/YiJiu-Li/XYHubTools/tree/main/Assets/XYHubTools#readme",
+    "changelogUrl": "https://github.com/YiJiu-Li/XYHubTools/tree/main/Assets/XYHubTools/CHANGELOG.md",
     "licensesUrl": "https://github.com/YiJiu-Li/XYHubTools/blob/main/LICENSE",
     "keywords": [
         "editor",
@@ -17,12 +17,18 @@
         "dissolve",
         "noise",
         "importer",
-        "workflow"
+        "workflow",
+        "mcp",
+        "ai",
+        "bridge",
+        "agent",
+        "named-pipe"
     ],
     "author": {
         "name": "YZJ",
         "email": "1228267639@qq.com",
         "url": "https://github.com/YiJiu-Li"
     },
+    "samples": [],
     "type": "tool"
 }

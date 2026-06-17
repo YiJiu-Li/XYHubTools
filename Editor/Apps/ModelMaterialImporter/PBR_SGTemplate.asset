@@ -38,3 +38,14 @@ MonoBehaviour:
   colorParameters: []
   enableKeywords: []
   disableKeywords: []
+  renderType: 0
+  materialLocation: -1
+  workflowMode: -1
+  surfaceType: -1
+  renderFace: -1
+  depthWrite: -1
+  depthTest: -1
+  alphaClipping: -1
+  alphaCutoff: 0.5
+  castShadows: -1
+  receiveShadows: -1

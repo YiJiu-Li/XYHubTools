@@ -9,7 +9,6 @@ namespace YiJiu.UnityCopyApp
     /// </summary>
     public class CopyAppWindow : XYEditorWindowBase<CopyAppPanel>
     {
-        [MenuItem("依旧/Asset Copy Tool")]
         public static void ShowWindow()
         {
             var win = GetWindow<CopyAppWindow>("资源复制工具");

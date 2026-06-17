@@ -7,7 +7,6 @@ namespace Framework.XYEditor.ShaderLibrary
 {
     public class ShaderLibraryWindow : XYEditorWindowBase<ShaderLibraryPanel>
     {
-        [MenuItem("依旧/Shader 库")]
         public static void ShowWindow()
         {
             var win = GetWindow<ShaderLibraryWindow>("Shader 库");

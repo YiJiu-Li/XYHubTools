@@ -10,7 +10,6 @@ namespace Framework.GPUNoise
     /// </summary>
     public class GPUNoiseToolWindow : XYEditorWindowBase<GPUNoisePanel>
     {
-        [MenuItem("依旧/特效图工具/GPU 噪声生成器 &N")]
         public static void ShowWindow()
         {
             var window = GetWindow<GPUNoiseToolWindow>();

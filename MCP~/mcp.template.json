@@ -1,0 +1,21 @@
+{
+  "_comment": "XY Bridge MCP 配置模板。仅供 VS Code SSE 使用；Codex 走 stdio 配置，不依赖此文件。",
+  "servers": {
+    "xybridge-core": {
+      "type": "sse",
+      "url": "http://127.0.0.1:3100/sse"
+    },
+    "xybridge-assets": {
+      "type": "sse",
+      "url": "http://127.0.0.1:3101/sse"
+    },
+    "xybridge-scene": {
+      "type": "sse",
+      "url": "http://127.0.0.1:3102/sse"
+    },
+    "xybridge-events": {
+      "type": "sse",
+      "url": "http://127.0.0.1:3103/sse"
+    }
+  }
+}

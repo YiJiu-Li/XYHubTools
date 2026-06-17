@@ -37,6 +37,12 @@
 - 支持自定义复制规则
 - 批量操作支持
 
+### 🤖 MCP Bridge
+- 通过 MCP 让 AI Agent 查询和操作 Unity Editor
+- 支持 Named Pipe 本地桥接
+- 支持 Codex stdio 连接
+- 支持 VS Code SSE 分组服务
+
 ## 📦 安装
 
 ### 方法 1: 通过 Git URL 安装 (推荐)
@@ -46,7 +52,7 @@
 3. 选择 `Add package from git URL...`
 4. 输入:
    ```
-   https://github.com/YiJiu-Li/XYHubTools.git
+   https://github.com/YiJiu-Li/XYHubTools.git?path=/Assets/XYHubTools
    ```
 
 ### 方法 2: 通过 manifest.json 安装
@@ -56,7 +62,7 @@
 ```json
 {
   "dependencies": {
-    "com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git"
+    "com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git?path=/Assets/XYHubTools"
   }
 }
 ```
@@ -64,14 +70,14 @@
 ### 方法 3: 指定版本安装
 
 ```json
-"com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git#v1.0.0"
+"com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git?path=/Assets/XYHubTools#v1.0.0"
 ```
 
 ## 🚀 快速开始
 
 ### 打开工具面板
 
-在 Unity 菜单栏选择 `XY Tools > XY Editor Hub` 打开工具中心窗口。
+在 Unity 菜单栏选择 `XY Tools > 编辑器工具集` 打开工具中心窗口。
 
 ### 使用材质透明度动画创建器
 
@@ -88,11 +94,40 @@
 3. 实时预览效果
 4. 导出为纹理资源
 
+### 使用 MCP Bridge
+
+1. 在工具中心选择 **MCP Bridge**
+2. 点击 **启动管道**
+3. 点击 **安装/更新配置**
+4. 安装 Python 依赖:
+   ```bash
+   pip install pywin32
+   ```
+
+#### Codex
+
+Codex 推荐使用 stdio 连接，不需要启动下方 4 个 SSE 服务。将以下配置加入用户级 Codex 配置文件：
+
+```toml
+[mcp_servers.xybridge]
+command = "python"
+args = ["xy_mcp_server.py", "--transport=stdio"]
+cwd = "你的 Unity 项目根目录"
+startup_timeout_sec = 30
+```
+
+修改后需要重启 Codex 或新开项目线程，当前会话通常不会热加载新增 MCP。
+
+#### VS Code
+
+VS Code 使用 `.vscode/mcp.json` 的 SSE 配置。需要在 Bridge 面板启动对应 SSE 服务，首次配置后 Reload Window。
+
 ## 📋 系统要求
 
 - Unity 2021.3 或更高版本
 - .NET Framework 4.x 或更高
-- Windows / macOS / Linux
+- 基础编辑器工具支持 Windows / macOS / Linux
+- MCP Bridge 当前使用 Windows Named Pipe，需要 Windows + Python + pywin32
 
 ## 📖 文档
 
@@ -103,6 +138,11 @@
 欢迎提交 Issue 和 Pull Request！
 
 ## 📝 更新日志
+
+### v1.2.0 (2026-06-17)
+- 🤖 新增 MCP Bridge
+- 🔧 工具统一收拢到 XY Editor Hub
+- 📝 更新 UPM 安装路径和 MCP 使用说明
 
 ### v1.0.0 (2026-03-04)
 - ✨ 初始版本发布

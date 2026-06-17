@@ -71,7 +71,7 @@ namespace Framework.GPUNoise.Editor
             serializedObject.Update();
 
             EditorGUILayout.Space(5);
-            XYEditorGUI.DrawHeader("GPU 器声生成器", "在GPU上高效生成各种类型的噪声纹理");
+            XYEditorGUI.DrawHeader("GPU 噪声生成器", "在GPU上高效生成各种类型的噪声纹理");
             EditorGUILayout.Space(10);
 
             // Compute Shader
@@ -117,7 +117,7 @@ namespace Framework.GPUNoise.Editor
                     {
                         EditorGUILayout.PropertyField(octaves, new GUIContent("八度数"));
                         EditorGUILayout.PropertyField(persistence, new GUIContent("持续度"));
-                        EditorGUILayout.PropertyField(lacunarity, new GUIContent("雙度"));
+                        EditorGUILayout.PropertyField(lacunarity, new GUIContent("间隙度"));
                     },
                     indent: true
                 );

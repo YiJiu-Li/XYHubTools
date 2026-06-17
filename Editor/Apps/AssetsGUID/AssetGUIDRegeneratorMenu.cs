@@ -13,13 +13,13 @@ namespace D.Tools
     {
         public const string Version = "1.0.4";
 
-        [MenuItem("Assets/Tools/Files Only", true)]
+        [MenuItem("Assets/XY Hub Tools/Regenerate GUIDs/Files Only", true)]
         public static bool RegenerateGUID_Validation()
         {
             return DoValidation();
         }
 
-        [MenuItem("Assets/Tools/Files and Folders", true)]
+        [MenuItem("Assets/XY Hub Tools/Regenerate GUIDs/Files and Folders", true)]
         public static bool RegenerateGUIDWithFolders_Validation()
         {
             return DoValidation();
@@ -38,13 +38,13 @@ namespace D.Tools
             return bAreSelectedAssetsValid;
         }
 
-        [MenuItem("Assets/Tools/Files Only")]
+        [MenuItem("Assets/XY Hub Tools/Regenerate GUIDs/Files Only")]
         public static void RegenerateGUID_Implementation()
         {
             DoImplementation(false);
         }
 
-        [MenuItem("Assets/Tools/Files and Folders")]
+        [MenuItem("Assets/XY Hub Tools/Regenerate GUIDs/Files and Folders")]
         public static void RegenerateGUIDWithFolders_Implementation()
         {
             DoImplementation(true);

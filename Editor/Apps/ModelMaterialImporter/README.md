@@ -77,7 +77,7 @@ ModelFolder/
 
 1. 在 Hub 顶部的模板选择框中选中刚才创建的模板
 2. 在 **Project 窗口**中右键点击 `.fbx` 模型文件
-3. 选择 `XZ工具 → 处理模型材质`
+3. 选择 `XY Hub Tools → Model Material Importer → 处理模型材质`
 4. 工具自动完成：提取材质 → 替换 Shader → 匹配贴图 → 保存
 
 ---

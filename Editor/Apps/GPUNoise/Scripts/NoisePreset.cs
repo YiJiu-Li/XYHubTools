@@ -5,7 +5,7 @@ namespace Framework.GPUNoise
     /// <summary>
     /// 噪声预设 - 保存和加载噪声生成器设置
     /// </summary>
-    [CreateAssetMenu(fileName = "NoisePreset", menuName = "噪声图工具/Noise Preset")]
+    [CreateAssetMenu(fileName = "NoisePreset", menuName = "XY Hub Tools/Noise Preset")]
     public class NoisePreset : ScriptableObject
     {
         [Header("基础设置")]

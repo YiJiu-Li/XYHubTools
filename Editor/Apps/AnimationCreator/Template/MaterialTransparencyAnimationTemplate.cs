@@ -9,7 +9,7 @@ namespace YZJ
     /// </summary>
     [CreateAssetMenu(
         fileName = "NewTransparencyAnimTemplate",
-        menuName = "依旧/动画模板工具模板",
+        menuName = "XY Hub Tools/动画模板工具模板",
         order = 101
     )]
     public class MaterialTransparencyAnimationTemplate : ScriptableObject

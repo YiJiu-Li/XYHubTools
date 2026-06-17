@@ -12,7 +12,6 @@ using YZJ;
 public class MaterialTransparencyAnimationWindow
     : XYEditorWindowBase<MaterialTransparencyAnimationPanel>
 {
-    [MenuItem("依旧/动画模板工具创建器")]
     public static void ShowWindow()
     {
         var window = GetWindow<MaterialTransparencyAnimationWindow>("动画模板工具");

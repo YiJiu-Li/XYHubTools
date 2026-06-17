@@ -3,9 +3,12 @@
 //  将 Python MCP Server 和 VS Code 配置复制到项目根目录
 // ═══════════════════════════════════════════════════════════════
 
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
+using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEditor.PackageManager;
 using UnityEngine;
@@ -56,6 +59,7 @@ namespace Framework.XYEditor.Bridge
 
             bool pyOk = CopyPythonServer();
             bool vscOk = CreateVscodeConfig();
+            bool codexOk = CreateCodexConfig();
 
             string msg = "";
             if (pyOk)
@@ -68,10 +72,15 @@ namespace Framework.XYEditor.Bridge
             else
                 msg += "⚠ .vscode/mcp.json 创建失败\n";
 
+            if (codexOk)
+                msg += "✅ Codex 用户级 MCP 配置已写入\n";
+            else
+                msg += "⚠ Codex 用户级 MCP 配置写入失败\n";
+
             msg += "\n下一步:\n";
             msg += "1. 安装 Python 依赖: pip install pywin32\n";
-            msg +=
-                "2. 在 Bridge 面板点 ▶ 启动 对应 MCP 服务\n3. VS Code 将自动连接（首次配置需 Reload Window 一次）";
+            msg += "2. Codex 使用 stdio，重启 Codex 或新开项目线程后生效\n";
+            msg += "3. VS Code 使用 SSE，需要在 Bridge 面板启动对应 SSE 服务并 Reload Window";
 
             EditorUtility.DisplayDialog("XY Bridge — 安装完成", msg, "确定");
         }
@@ -84,6 +93,11 @@ namespace Framework.XYEditor.Bridge
         public static void CreateVscodeConfigOnly()
         {
             CreateVscodeConfig();
+        }
+
+        public static void CreateCodexConfigOnly()
+        {
+            CreateCodexConfig();
         }
 
         // ═══════════════════════════════════════════════════════════
@@ -119,6 +133,90 @@ namespace Framework.XYEditor.Bridge
         {
             // 将全部 MCP 分组写入 mcp.json（SSE 格式）
             return WriteMcpJsonWithGroups(new List<string>(AllGroups));
+        }
+
+        private static bool CreateCodexConfig()
+        {
+            try
+            {
+                string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                if (string.IsNullOrEmpty(userProfile))
+                    return false;
+
+                string codexDir = Path.Combine(userProfile, ".codex");
+                Directory.CreateDirectory(codexDir);
+
+                string configPath = Path.Combine(codexDir, "config.toml");
+                string serverName = GetCodexServerName();
+                string block = BuildCodexServerBlock(serverName);
+                string config = File.Exists(configPath)
+                    ? File.ReadAllText(configPath, Encoding.UTF8)
+                    : "";
+
+                string pattern =
+                    @"(?ms)^\[mcp_servers\." + Regex.Escape(serverName) + @"\]\s*.*?(?=^\[|\z)";
+                if (Regex.IsMatch(config, pattern))
+                    config = Regex.Replace(config, pattern, block.TrimEnd() + Environment.NewLine);
+                else
+                {
+                    if (!config.EndsWith(Environment.NewLine) && config.Length > 0)
+                        config += Environment.NewLine;
+                    config += Environment.NewLine + block;
+                }
+
+                File.WriteAllText(configPath, config, new UTF8Encoding(false));
+                UnityEngine.Debug.Log(
+                    "[XY Bridge] Codex MCP 配置已更新: "
+                        + serverName
+                        + " -> "
+                        + ProjectRoot
+                );
+                return true;
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError("[XY Bridge] Codex 配置写入失败: " + ex.Message);
+                return false;
+            }
+        }
+
+        internal static string GetCodexServerName()
+        {
+            string projectName = new DirectoryInfo(ProjectRoot).Name;
+            var sb = new StringBuilder("xybridge_");
+            foreach (char c in projectName.ToLowerInvariant())
+            {
+                if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+                    sb.Append(c);
+                else
+                    sb.Append('_');
+            }
+            return Regex.Replace(sb.ToString(), "_+", "_").TrimEnd('_');
+        }
+
+        private static string BuildCodexServerBlock(string serverName)
+        {
+            string root = EscapeTomlString(ProjectRoot);
+            return
+                "[mcp_servers."
+                + serverName
+                + "]"
+                + Environment.NewLine
+                + "command = \"python\""
+                + Environment.NewLine
+                + "args = [\"xy_mcp_server.py\", \"--transport=stdio\"]"
+                + Environment.NewLine
+                + "cwd = \""
+                + root
+                + "\""
+                + Environment.NewLine
+                + "startup_timeout_sec = 30"
+                + Environment.NewLine;
+        }
+
+        private static string EscapeTomlString(string value)
+        {
+            return (value ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"");
         }
 
         // ═══════════════════════════════════════════════════════════

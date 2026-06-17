@@ -290,7 +290,7 @@ namespace Framework.XYEditor.Bridge
             if (GUI.Button(new Rect(bx, y, btnW + 20, btnH), "安装/更新配置", _btnStyle))
             {
                 BridgeSetup.SetupAll();
-                AddLog("MCP 一键安装已执行");
+                AddLog("MCP 配置已更新，Codex 服务名: " + BridgeSetup.GetCodexServerName());
             }
 
             GUI.enabled = old;

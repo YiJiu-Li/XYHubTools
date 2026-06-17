@@ -70,7 +70,7 @@
 ### 方法 3: 指定版本安装
 
 ```json
-"com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git?path=/Assets/XYHubTools#v1.0.0"
+"com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git?path=/Assets/XYHubTools#v1.2.1"
 ```
 
 ## 🚀 快速开始
@@ -106,15 +106,19 @@
 
 #### Codex
 
-Codex 推荐使用 stdio 连接，不需要启动下方 4 个 SSE 服务。将以下配置加入用户级 Codex 配置文件：
+Codex 推荐使用 stdio 连接，不需要启动下方 4 个 SSE 服务。
+
+点击 Bridge 面板的 **安装/更新配置** 后，插件会把当前 Unity 项目写入用户级 Codex 配置：
 
 ```toml
-[mcp_servers.xybridge]
+[mcp_servers.xybridge_项目名]
 command = "python"
 args = ["xy_mcp_server.py", "--transport=stdio"]
 cwd = "你的 Unity 项目根目录"
 startup_timeout_sec = 30
 ```
+
+每个 Unity 项目会生成自己的 MCP server 名称，避免多个项目都连接到同一个固定项目。
 
 修改后需要重启 Codex 或新开项目线程，当前会话通常不会热加载新增 MCP。
 
@@ -138,6 +142,9 @@ VS Code 使用 `.vscode/mcp.json` 的 SSE 配置。需要在 Bridge 面板启动
 欢迎提交 Issue 和 Pull Request！
 
 ## 📝 更新日志
+
+### v1.2.1 (2026-06-17)
+- 🐛 当前 Unity 项目可自动写入独立 Codex MCP server，避免多个项目共用固定 cwd
 
 ### v1.2.0 (2026-06-17)
 - 🤖 新增 MCP Bridge

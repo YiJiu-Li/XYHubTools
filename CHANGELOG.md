@@ -5,6 +5,13 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.1] - 2026-06-17
+
+### 修复
+- 🐛 当前 Unity 项目可自动写入独立 Codex MCP server，避免多个项目共用固定 cwd
+
+---
+
 ## [1.2.0] - 2026-06-17
 
 ### 新增
@@ -19,6 +26,7 @@
 - 🔧 右键资源菜单统一到 `Assets/XY Hub Tools`
 - 📝 修正 Git URL 安装说明，支持 `?path=/Assets/XYHubTools`
 - 📝 补充 MCP Bridge 的 Codex / VS Code 配置说明
+- 🔧 MCP Bridge 安装配置时自动为当前 Unity 项目写入 Codex MCP server
 
 ### 修复
 - 🐛 修复 MCP ping 假成功的问题

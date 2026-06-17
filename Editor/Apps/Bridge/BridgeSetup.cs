@@ -211,6 +211,14 @@ namespace Framework.XYEditor.Bridge
                 + "\""
                 + Environment.NewLine
                 + "startup_timeout_sec = 30"
+                + Environment.NewLine
+                + "[mcp_servers."
+                + serverName
+                + ".env]"
+                + Environment.NewLine
+                + "PYTHONIOENCODING = \"utf-8\""
+                + Environment.NewLine
+                + "PYTHONUTF8 = \"1\""
                 + Environment.NewLine;
         }
 

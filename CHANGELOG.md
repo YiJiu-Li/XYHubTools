@@ -5,6 +5,13 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.3] - 2026-06-17
+
+### 修复
+- 🐛 Codex MCP 配置自动写入 `PYTHONIOENCODING=utf-8` 和 `PYTHONUTF8=1`，避免 Windows 环境下中文输出编码异常
+
+---
+
 ## [1.2.2] - 2026-06-17
 
 ### 修复

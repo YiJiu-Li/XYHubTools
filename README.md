@@ -70,7 +70,7 @@
 ### 方法 3: 指定版本安装
 
 ```json
-"com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git?path=/Assets/XYHubTools#v1.2.2"
+"com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git?path=/Assets/XYHubTools#v1.2.3"
 ```
 
 ## 🚀 快速开始
@@ -142,6 +142,9 @@ VS Code 使用 `.vscode/mcp.json` 的 SSE 配置。需要在 Bridge 面板启动
 欢迎提交 Issue 和 Pull Request！
 
 ## 📝 更新日志
+
+### v1.2.3 (2026-06-17)
+- 🐛 Codex MCP 配置自动写入 `PYTHONIOENCODING=utf-8` 和 `PYTHONUTF8=1`
 
 ### v1.2.2 (2026-06-17)
 - 🐛 修复 `printJson` 对匿名对象和字典输出 `{}` 的问题

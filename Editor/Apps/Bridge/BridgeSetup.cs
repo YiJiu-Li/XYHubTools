@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════
 //  BridgeSetup — MCP Bridge 安装配置（由 XYHub 面板调用）
-//  将 Python MCP Server 复制到项目根目录，并写入 Codex stdio 配置
+//  将 Python MCP Server 复制到项目根目录，并写入 Codex / VS Code stdio 配置
 // ═══════════════════════════════════════════════════════════════
 
 using System;
@@ -55,6 +55,7 @@ namespace Framework.XYEditor.Bridge
             }
 
             bool pyOk = CopyPythonServer();
+            bool vscOk = CreateVscodeConfig();
             bool codexOk = CreateCodexConfig();
 
             string msg = "";
@@ -63,6 +64,11 @@ namespace Framework.XYEditor.Bridge
             else
                 msg += "⚠ xy_mcp_server.py 复制失败（可能已存在）\n";
 
+            if (vscOk)
+                msg += "✅ VS Code 项目级 MCP 配置已写入\n";
+            else
+                msg += "⚠ VS Code 项目级 MCP 配置写入失败\n";
+
             if (codexOk)
                 msg += "✅ Codex 用户级 MCP 配置已写入\n";
             else
@@ -70,7 +76,7 @@ namespace Framework.XYEditor.Bridge
 
             msg += "\n下一步:\n";
             msg += "1. 安装 Python 依赖: pip install pywin32\n";
-            msg += "2. Codex 使用 stdio，重启 Codex 或新开项目线程后生效";
+            msg += "2. Codex / VS Code 均使用 stdio，重启客户端或新开会话后生效";
 
             EditorUtility.DisplayDialog("XY Bridge — 安装完成", msg, "确定");
         }
@@ -83,6 +89,11 @@ namespace Framework.XYEditor.Bridge
         public static void CreateCodexConfigOnly()
         {
             CreateCodexConfig();
+        }
+
+        public static void CreateVscodeConfigOnly()
+        {
+            CreateVscodeConfig();
         }
 
         // ═══════════════════════════════════════════════════════════
@@ -132,21 +143,10 @@ namespace Framework.XYEditor.Bridge
                     ? File.ReadAllText(configPath, Encoding.UTF8)
                     : "";
 
-                string escapedServerName = Regex.Escape(serverName);
-                string pattern =
-                    @"(?ms)^\[mcp_servers\."
-                    + escapedServerName
-                    + @"\]\s*.*?(?:^\[mcp_servers\."
-                    + escapedServerName
-                    + @"\.env\]\s*.*?(?=^\[|\z))?";
-                if (Regex.IsMatch(config, pattern))
-                    config = Regex.Replace(config, pattern, block.TrimEnd() + Environment.NewLine);
-                else
-                {
-                    if (!config.EndsWith(Environment.NewLine) && config.Length > 0)
-                        config += Environment.NewLine;
-                    config += Environment.NewLine + block;
-                }
+                config = RemoveCodexServerConfig(config, serverName);
+                if (!config.EndsWith(Environment.NewLine) && config.Length > 0)
+                    config += Environment.NewLine;
+                config += Environment.NewLine + block;
 
                 File.WriteAllText(configPath, config, new UTF8Encoding(false));
                 UnityEngine.Debug.Log(
@@ -160,6 +160,38 @@ namespace Framework.XYEditor.Bridge
             catch (Exception ex)
             {
                 UnityEngine.Debug.LogError("[XY Bridge] Codex 配置写入失败: " + ex.Message);
+                return false;
+            }
+        }
+
+        private static bool CreateVscodeConfig()
+        {
+            try
+            {
+                string vscodeDir = Path.Combine(ProjectRoot, ".vscode");
+                Directory.CreateDirectory(vscodeDir);
+
+                string configPath = Path.Combine(vscodeDir, "mcp.json");
+                if (File.Exists(configPath))
+                {
+                    string old = File.ReadAllText(configPath, Encoding.UTF8);
+                    string backupPath = configPath + ".bak";
+                    if (!File.Exists(backupPath))
+                        File.WriteAllText(backupPath, old, new UTF8Encoding(false));
+                }
+
+                File.WriteAllText(
+                    configPath,
+                    BuildVscodeMcpJson(GetCodexServerName()),
+                    new UTF8Encoding(false)
+                );
+                UnityEngine.Debug.Log("[XY Bridge] VS Code MCP 配置已更新: " + configPath);
+                AssetDatabase.Refresh();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError("[XY Bridge] VS Code 配置写入失败: " + ex.Message);
                 return false;
             }
         }
@@ -206,7 +238,85 @@ namespace Framework.XYEditor.Bridge
                 + Environment.NewLine;
         }
 
+        private static string BuildVscodeMcpJson(string serverName)
+        {
+            string root = EscapeJsonString(ProjectRoot);
+            return
+                "{"
+                + Environment.NewLine
+                + "  \"servers\": {"
+                + Environment.NewLine
+                + "    \""
+                + EscapeJsonString(serverName)
+                + "\": {"
+                + Environment.NewLine
+                + "      \"type\": \"stdio\","
+                + Environment.NewLine
+                + "      \"command\": \"python\","
+                + Environment.NewLine
+                + "      \"args\": [\"xy_mcp_server.py\", \"--transport=stdio\"],"
+                + Environment.NewLine
+                + "      \"cwd\": \""
+                + root
+                + "\","
+                + Environment.NewLine
+                + "      \"env\": {"
+                + Environment.NewLine
+                + "        \"PYTHONIOENCODING\": \"utf-8\","
+                + Environment.NewLine
+                + "        \"PYTHONUTF8\": \"1\""
+                + Environment.NewLine
+                + "      }"
+                + Environment.NewLine
+                + "    }"
+                + Environment.NewLine
+                + "  }"
+                + Environment.NewLine
+                + "}"
+                + Environment.NewLine;
+        }
+
+        private static string RemoveCodexServerConfig(string config, string serverName)
+        {
+            if (string.IsNullOrEmpty(config))
+                return "";
+
+            string[] lines = config.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+            var sb = new StringBuilder();
+            bool skipping = false;
+            string serverHeader = "[mcp_servers." + serverName + "]";
+            string envHeader = "[mcp_servers." + serverName + ".env]";
+
+            foreach (string line in lines)
+            {
+                string trimmed = line.Trim();
+                bool isTable = trimmed.StartsWith("[") && trimmed.EndsWith("]");
+                bool isManagedTable =
+                    string.Equals(trimmed, serverHeader, StringComparison.Ordinal)
+                    || string.Equals(trimmed, envHeader, StringComparison.Ordinal);
+
+                if (isManagedTable)
+                {
+                    skipping = true;
+                    continue;
+                }
+
+                if (isTable)
+                    skipping = false;
+
+                if (!skipping)
+                    sb.AppendLine(line);
+            }
+
+            return Regex.Replace(sb.ToString(), @"(\r?\n){3,}", Environment.NewLine + Environment.NewLine).TrimEnd();
+        }
+
         private static string EscapeTomlString(string value)
+        {
+            return (value ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"");
+        }
+
+        private static string EscapeJsonString(string value)
         {
             return (value ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"");
         }

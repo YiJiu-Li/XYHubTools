@@ -41,6 +41,7 @@
 - 通过 MCP 让 AI Agent 查询和操作 Unity Editor
 - 支持 Named Pipe 本地桥接
 - 支持 Codex stdio 连接
+- 支持 VS Code stdio 连接
 
 ### 🔔 Git 推送监听
 - 检测远端分支是否有新推送
@@ -75,7 +76,7 @@
 ### 方法 3: 指定版本安装
 
 ```json
-"com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git?path=/Assets/XYHubTools#v1.2.8"
+"com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git?path=/Assets/XYHubTools#v1.2.9"
 ```
 
 ## 🚀 快速开始
@@ -125,6 +126,10 @@ startup_timeout_sec = 30
 
 修改后需要重启 Codex 或新开项目线程，当前会话通常不会热加载新增 MCP。
 
+#### VS Code
+
+点击 Bridge 面板的 **安装/更新配置** 后，插件会生成项目级 `.vscode/mcp.json`。VS Code 使用 stdio 连接，不需要启动 SSE 服务。
+
 ## 📋 系统要求
 
 - Unity 2021.3 或更高版本
@@ -141,6 +146,10 @@ startup_timeout_sec = 30
 欢迎提交 Issue 和 Pull Request！
 
 ## 📝 更新日志
+
+### v1.2.9 (2026-06-18)
+- 🔧 MCP Bridge 恢复生成 VS Code 项目级 MCP 配置，使用 stdio，不再依赖 SSE
+- 🔧 Codex 配置写入会先清理当前项目 server 的旧残留块，避免重复配置
 
 ### v1.2.8 (2026-06-18)
 - 🐛 修复 MCP Bridge 重复安装配置可能导致 Codex `config.toml` 报 `duplicate key` 的问题

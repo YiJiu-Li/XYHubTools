@@ -5,6 +5,14 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.9] - 2026-06-18
+
+### 变更
+- 🔧 MCP Bridge 恢复生成 VS Code 项目级 MCP 配置，改用 stdio，不再依赖 SSE 服务
+- 🔧 Codex 配置写入改为先清理当前项目 server 的所有旧残留块，再写入干净配置
+
+---
+
 ## [1.2.8] - 2026-06-18
 
 ### 修复

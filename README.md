@@ -41,7 +41,6 @@
 - 通过 MCP 让 AI Agent 查询和操作 Unity Editor
 - 支持 Named Pipe 本地桥接
 - 支持 Codex stdio 连接
-- 支持 VS Code SSE 分组服务
 
 ### 🔔 Git 推送监听
 - 检测远端分支是否有新推送
@@ -76,7 +75,7 @@
 ### 方法 3: 指定版本安装
 
 ```json
-"com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git?path=/Assets/XYHubTools#v1.2.5"
+"com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git?path=/Assets/XYHubTools#v1.2.6"
 ```
 
 ## 🚀 快速开始
@@ -112,8 +111,6 @@
 
 #### Codex
 
-Codex 推荐使用 stdio 连接，不需要启动下方 4 个 SSE 服务。
-
 点击 Bridge 面板的 **安装/更新配置** 后，插件会把当前 Unity 项目写入用户级 Codex 配置：
 
 ```toml
@@ -127,10 +124,6 @@ startup_timeout_sec = 30
 每个 Unity 项目会生成自己的 MCP server 名称，避免多个项目都连接到同一个固定项目。
 
 修改后需要重启 Codex 或新开项目线程，当前会话通常不会热加载新增 MCP。
-
-#### VS Code
-
-VS Code 使用 `.vscode/mcp.json` 的 SSE 配置。需要在 Bridge 面板启动对应 SSE 服务，首次配置后 Reload Window。
 
 ## 📋 系统要求
 
@@ -148,6 +141,9 @@ VS Code 使用 `.vscode/mcp.json` 的 SSE 配置。需要在 Bridge 面板启动
 欢迎提交 Issue 和 Pull Request！
 
 ## 📝 更新日志
+
+### v1.2.6 (2026-06-18)
+- 🔧 MCP Bridge 移除 VS Code SSE 服务，收敛为 Codex stdio + Unity Named Pipe
 
 ### v1.2.5 (2026-06-18)
 - 🐛 修复 Git 推送监听在未打开工具集窗口时不会弹出通知的问题

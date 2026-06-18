@@ -309,7 +309,7 @@ ALL_TOOLS = [
     },
 ]
 
-# ═══════════════ 分组（每组 ≤9 工具，绕过 VS Code 截断） ═══════════════
+# ═══════════════ 工具分组（保留给 stdio 按需裁剪工具列表）═══════════════
 TOOL_GROUPS = {
     "core": [  # 基础通讯 — 4 tools
         "unity_ping",
@@ -433,157 +433,6 @@ def handle(name: str, args: dict, close_after: bool = True) -> str:
             UP.close()
 
 
-# ═══════════════ SSE 传输（HTTP 端口，Unity 可直接启动）═══════════════
-def run_sse_server(port: int, server_name: str):
-    """基于内置 http.server 的 MCP SSE 传输，无需额外依赖"""
-    import threading
-    import uuid
-    import queue
-    from http.server import HTTPServer, BaseHTTPRequestHandler
-
-    sessions = {}  # sessionId -> Queue
-    sessions_lock = threading.Lock()
-
-    def dispatch(sid, body):
-        mid = None
-        try:
-            msg = json.loads(body)
-            mid = msg.get("id")
-            m = msg.get("method", "")
-            if m == "initialize":
-                resp = json.dumps(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": mid,
-                        "result": {
-                            "protocolVersion": "2024-11-05",
-                            "serverInfo": {"name": server_name, "version": "1.0"},
-                            "capabilities": {"tools": {"listChanged": False}},
-                        },
-                    }
-                )
-            elif m == "notifications/initialized":
-                return
-            elif m == "tools/list":
-                resp = json.dumps(
-                    {"jsonrpc": "2.0", "id": mid, "result": {"tools": TOOLS}}
-                )
-            elif m == "tools/call":
-                tn = msg["params"]["name"]
-                ta = msg["params"].get("arguments", {})
-                txt = handle(tn, ta, close_after=False)
-                resp = json.dumps(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": mid,
-                        "result": {"content": [{"type": "text", "text": txt}]},
-                    }
-                )
-            else:
-                resp = json.dumps(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": mid,
-                        "error": {"code": -32601, "message": f"Method not found: {m}"},
-                    }
-                )
-            if sid:
-                with sessions_lock:
-                    q = sessions.get(sid)
-                if q:
-                    q.put(resp)
-        except Exception as e:
-            if mid is not None and sid:
-                with sessions_lock:
-                    q = sessions.get(sid)
-                if q:
-                    q.put(
-                        json.dumps(
-                            {
-                                "jsonrpc": "2.0",
-                                "id": mid,
-                                "error": {"code": -32603, "message": str(e)},
-                            }
-                        )
-                    )
-
-    class MCPHandler(BaseHTTPRequestHandler):
-        def log_message(self, fmt, *a):
-            print(f"[YZJ-MCP:{server_name}] HTTP {fmt % a}", file=sys.stderr)
-
-        def _cors(self):
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
-
-        def do_OPTIONS(self):
-            self.send_response(200)
-            self._cors()
-            self.end_headers()
-
-        def do_GET(self):
-            if not self.path.startswith("/sse"):
-                self.send_response(404)
-                self.end_headers()
-                return
-            sid = str(uuid.uuid4())
-            q = queue.Queue()
-            with sessions_lock:
-                sessions[sid] = q
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "keep-alive")
-            self._cors()
-            self.end_headers()
-            try:
-                self.wfile.write(
-                    f"event: endpoint\ndata: /message?sessionId={sid}\n\n".encode()
-                )
-                self.wfile.flush()
-                while True:
-                    try:
-                        data = q.get(timeout=20)
-                        if data is None:
-                            break
-                        self.wfile.write(f"event: message\ndata: {data}\n\n".encode())
-                        self.wfile.flush()
-                    except queue.Empty:
-                        self.wfile.write(b": keepalive\n\n")
-                        self.wfile.flush()
-            except Exception:
-                pass
-            finally:
-                with sessions_lock:
-                    sessions.pop(sid, None)
-
-        def do_POST(self):
-            if not self.path.startswith("/message"):
-                self.send_response(404)
-                self.end_headers()
-                return
-            sid = None
-            if "?" in self.path:
-                for part in self.path.split("?", 1)[1].split("&"):
-                    if part.startswith("sessionId="):
-                        sid = part[10:]
-            length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(length).decode("utf-8")
-            self.send_response(202)
-            self.send_header("Content-Length", "0")
-            self._cors()
-            self.end_headers()
-            threading.Thread(target=dispatch, args=(sid, body), daemon=True).start()
-
-    httpd = HTTPServer(("127.0.0.1", port), MCPHandler)
-    print(
-        f"[YZJ-MCP:{server_name}] SSE 启动: http://127.0.0.1:{port}/sse",
-        file=sys.stderr,
-    )
-    sys.stderr.flush()
-    httpd.serve_forever()
-
-
 def main(server_name: str = "yzjbridge"):
     global TOOLS
     print(
@@ -692,6 +541,13 @@ if __name__ == "__main__":
         "scene": "xybridge-scene",
         "events": "xybridge-events",
     }
+    if transport != "stdio":
+        print(
+            f"[YZJ-MCP] 不再支持 transport={transport}；请使用 --transport=stdio",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
     if group in TOOL_GROUPS:
         names = TOOL_GROUPS[group]
         TOOLS = [t for t in ALL_TOOLS if t["name"] in names]
@@ -700,13 +556,7 @@ if __name__ == "__main__":
             f"[YZJ-MCP] 分组: {group} ({len(TOOLS)} tools), 传输: {transport}",
             file=sys.stderr,
         )
-        if transport == "sse":
-            run_sse_server(port, sname)
-        else:
-            main(sname)
+        main(sname)
     else:
         print(f"[YZJ-MCP] 全量模式, 传输: {transport}", file=sys.stderr)
-        if transport == "sse":
-            run_sse_server(port, "xybridge")
-        else:
-            main("xybridge")
+        main("xybridge")

@@ -4,8 +4,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.IO;
 using UnityEditor;
 using UnityEngine;
 
@@ -16,7 +14,7 @@ namespace Framework.XYEditor.Bridge
     {
         public string ToolName => "MCP Bridge";
         public string Category => "服务";
-        public string Description => "AI MCP 桥接 — 管道转发 + 可选 SSE 服务管理";
+        public string Description => "AI MCP 桥接 — Unity 管道服务 + Codex stdio 配置";
         public string DocumentPath => null;
         public Texture2D Icon => EditorGUIUtility.FindTexture("d_NetworkAnimator Icon");
 
@@ -34,14 +32,11 @@ namespace Framework.XYEditor.Bridge
 
         // ── 缓存的 GUIStyle ──
         private GUIStyle _titleStyle;
-        private GUIStyle _subTitleStyle;
         private GUIStyle _statusStyle;
         private GUIStyle _infoStyle;
         private GUIStyle _logStyle;
         private GUIStyle _btnStyle;
         private GUIStyle _sectionStyle;
-        private GUIStyle _cardOnStyle;
-        private GUIStyle _cardOffStyle;
         private GUIStyle _testRowStyle;
         private GUIStyle _testHeaderStyle;
 
@@ -53,11 +48,6 @@ namespace Framework.XYEditor.Bridge
                 {
                     fontSize = 15,
                     normal = { textColor = new Color(0.9f, 0.9f, 0.9f) },
-                };
-                _subTitleStyle = new GUIStyle(EditorStyles.boldLabel)
-                {
-                    fontSize = 12,
-                    normal = { textColor = new Color(0.75f, 0.75f, 0.75f) },
                 };
                 _statusStyle = new GUIStyle(EditorStyles.boldLabel)
                 {
@@ -74,14 +64,6 @@ namespace Framework.XYEditor.Bridge
                 };
                 _btnStyle = new GUIStyle(GUI.skin.button) { fontSize = 11, fixedHeight = 24 };
                 _sectionStyle = new GUIStyle(EditorStyles.foldout) { fontStyle = FontStyle.Bold };
-                _cardOnStyle = new GUIStyle(EditorStyles.helpBox)
-                {
-                    normal = { background = MakeTex(1, 1, new Color(0.08f, 0.22f, 0.08f, 0.6f)) },
-                };
-                _cardOffStyle = new GUIStyle(EditorStyles.helpBox)
-                {
-                    normal = { background = MakeTex(1, 1, new Color(0.18f, 0.18f, 0.18f, 0.5f)) },
-                };
                 _testRowStyle = new GUIStyle(EditorStyles.helpBox)
                 {
                     padding = new RectOffset(6, 6, 4, 4),
@@ -92,14 +74,6 @@ namespace Framework.XYEditor.Bridge
                     normal = { textColor = new Color(0.85f, 0.85f, 0.85f) },
                 };
             }
-        }
-
-        private static Texture2D MakeTex(int w, int h, Color c)
-        {
-            var t = new Texture2D(w, h);
-            t.SetPixel(0, 0, c);
-            t.Apply();
-            return t;
         }
 
         public void OnEnable()
@@ -117,7 +91,7 @@ namespace Framework.XYEditor.Bridge
             float pad = 16f;
             float w = rect.width - pad * 2;
             float y = 14f;
-            float totalH = 1120f;
+            float totalH = 820f;
 
             _scroll = GUI.BeginScrollView(rect, _scroll, new Rect(0, 0, rect.width - 16, totalH));
 
@@ -134,54 +108,6 @@ namespace Framework.XYEditor.Bridge
             // ── 操作按钮 ──
             DrawControls(pad, ref y, w);
             y += 8;
-
-            // ── 分割 + MCP 组标题 ──
-            EditorGUI.DrawRect(new Rect(pad, y, w, 1), new Color(0.35f, 0.35f, 0.35f, 0.5f));
-            y += 10;
-            GUI.Label(
-                new Rect(pad, y, w, 22),
-                "可选 SSE 服务（VS Code 使用；Codex stdio 可保持停止）",
-                _subTitleStyle
-            );
-            y += 26;
-
-            // ── MCP 分组卡片 ──
-            foreach (var group in BridgeSetup.AllGroups)
-            {
-                DrawGroupCard(pad, ref y, w, group);
-                y += 6;
-            }
-
-            // ── 提示 + Reload VS Code ──
-            float hintY = y;
-            var hintStyle = new GUIStyle(EditorStyles.miniLabel)
-            {
-                normal = { textColor = new Color(0.5f, 0.5f, 0.2f) },
-                wordWrap = true,
-            };
-            string hint =
-                "提示：下方 SSE 服务显示已停止是正常状态；只有 VS Code 需要通过 .vscode/mcp.json 常驻连接时才需要启动。";
-            float hintH = hintStyle.CalcHeight(new GUIContent(hint), w - 180);
-            GUI.Label(new Rect(pad, hintY, w - 180, hintH), hint, hintStyle);
-
-            // Reload VS Code 按钮
-            var reloadStyle = new GUIStyle(GUI.skin.button)
-            {
-                fontSize = 11,
-                fixedHeight = 22,
-                normal = { textColor = new Color(0.8f, 0.7f, 0.2f) },
-            };
-            if (
-                GUI.Button(
-                    new Rect(pad + w - 170, hintY, 170, 22),
-                    "Reload VS Code 生效",
-                    reloadStyle
-                )
-            )
-            {
-                ReloadVSCode();
-            }
-            y += Math.Max(hintH, 24) + 8;
 
             // ── 21 工具自检面板 ──
             y += 4;
@@ -294,108 +220,8 @@ namespace Framework.XYEditor.Bridge
             }
 
             GUI.enabled = old;
-            y += btnH + 8;
-
-            // ── MCP 进程控制 ─────────────────────────────────
-            GUI.Label(new Rect(x, y + 5, 84, 18), "SSE 服务", _testHeaderStyle);
-            bx = x + 84;
-            if (GUI.Button(new Rect(bx, y, btnW, btnH), "启动全部 SSE", _btnStyle))
-            {
-                foreach (var g in BridgeSetup.AllGroups)
-                    BridgeSetup.StartMcpGroup(g);
-                AddLog("全部 SSE MCP 服务已启动");
-            }
-            bx += btnW + gap;
-            if (GUI.Button(new Rect(bx, y, btnW, btnH), "停止全部 SSE", _btnStyle))
-            {
-                BridgeSetup.StopAllMcpGroups();
-                AddLog("全部 SSE MCP 服务已停止");
-            }
             y += btnH;
         }
-
-        // ═══════════════════════════════════════════════════════════
-        //  单组 MCP 卡片
-        // ═══════════════════════════════════════════════════════════
-
-        private void DrawGroupCard(float x, ref float y, float w, string group)
-        {
-            bool running = BridgeSetup.IsMcpGroupRunning(group);
-            int port = BridgeSetup.GroupPorts.ContainsKey(group)
-                ? BridgeSetup.GroupPorts[group]
-                : 0;
-            float cardH = 44f;
-
-            GUI.Box(new Rect(x, y, w, cardH), "", running ? _cardOnStyle : _cardOffStyle);
-
-            // 左侧状态点
-            EditorGUI.DrawRect(
-                new Rect(x + 8, y + 16, 8, 8),
-                running ? new Color(0.15f, 0.85f, 0.25f) : new Color(0.45f, 0.45f, 0.45f)
-            );
-
-            // 组名 + 描述 + 端口
-            string label = GetGroupLabel(group);
-            string desc = GetGroupDesc(group) + "  [:" + port + "]";
-            GUI.Label(new Rect(x + 22, y + 4, w - 200, 18), label, _statusStyle);
-            GUI.Label(new Rect(x + 22, y + 22, w - 200, 16), desc, _infoStyle);
-
-            // 运行状态文字
-            var runColorStyle = new GUIStyle(_infoStyle)
-            {
-                normal =
-                {
-                    textColor = running ? new Color(0.2f, 0.9f, 0.3f) : new Color(0.5f, 0.5f, 0.5f),
-                },
-            };
-            GUI.Label(
-                new Rect(x + w - 188, y + 14, 80, 18),
-                running ? "● 运行中" : "○ 未启动",
-                runColorStyle
-            );
-
-            // 启动 / 停止 按鈕
-            float btnX = x + w - 100;
-            float btnY = y + 10;
-            if (running)
-            {
-                if (GUI.Button(new Rect(btnX, btnY, 90, 24), "■ 停止", _btnStyle))
-                {
-                    BridgeSetup.StopMcpGroup(group);
-                    AddLog("已停止: " + label);
-                }
-            }
-            else
-            {
-                if (GUI.Button(new Rect(btnX, btnY, 90, 24), "▶ 启动", _btnStyle))
-                {
-                    BridgeSetup.StartMcpGroup(group);
-                    AddLog("已启动: " + label + " 端口:" + port);
-                }
-            }
-
-            y += cardH;
-        }
-
-        private static string GetGroupLabel(string g) =>
-            g switch
-            {
-                "core" => "xybridge-core",
-                "assets" => "xybridge-assets",
-                "scene" => "xybridge-scene",
-                "events" => "xybridge-events",
-                _ => g,
-            };
-
-        private static string GetGroupDesc(string g) =>
-            g switch
-            {
-                "core" => "ping / status / log / console",
-                "assets" => "select / find / import / refresh / prefab",
-                "scene" => "execute_code / selection / scene / play / screenshot / component",
-                "events" => "subscribe / poll / screenshot",
-                _ => "",
-            };
 
         // ═══════════════════════════════════════════════════════════
         //  状态日志
@@ -767,45 +593,5 @@ namespace Framework.XYEditor.Bridge
             };
         }
 
-        // ═══════════════════════════════════════════════════════════
-        //  Reload VS Code
-        // ═══════════════════════════════════════════════════════════
-
-        private void ReloadVSCode()
-        {
-            // VS Code CLI 不支持 reload 已有窗口，只能引导用户手动操作
-            bool ok = EditorUtility.DisplayDialog(
-                "如何让 mcp.json 生效",
-                "mcp.json 已保存完毕。\n\n要启动 / 重启 MCP 服务器，请在 VS Code 中：\n\n"
-                    + "  Ctrl+Shift+P  →  Developer: Reload Window\n\n"
-                    + "（点「聚焦 VS Code」可将 VS Code 窗口带到前台）",
-                "聚焦 VS Code",
-                "关闭"
-            );
-
-            if (ok)
-            {
-                // 用 --reuse-window 聚焦已有窗口，不新建
-                try
-                {
-                    string projectRoot = System.IO.Path.GetDirectoryName(
-                        UnityEngine.Application.dataPath
-                    );
-                    var psi = new ProcessStartInfo
-                    {
-                        FileName = "cmd.exe",
-                        Arguments = "/c code --reuse-window \"" + projectRoot + "\"",
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
-                    };
-                    Process.Start(psi);
-                    AddLog("已聚焦 VS Code，请按 Ctrl+Shift+P → Developer: Reload Window");
-                }
-                catch (Exception ex)
-                {
-                    AddLog("聚焦失败: " + ex.Message);
-                }
-            }
-        }
     }
 }

@@ -2,3 +2,5 @@
 *.log
 Temp/
 Library/
+__pycache__/
+*.pyc

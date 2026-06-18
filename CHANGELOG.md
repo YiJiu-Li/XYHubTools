@@ -5,6 +5,15 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.6] - 2026-06-18
+
+### 变更
+- 🔧 MCP Bridge 移除 VS Code SSE 服务管理入口，收敛为 Unity Named Pipe + Codex stdio 配置
+- 🔧 安装/更新配置不再生成 `.vscode/mcp.json`
+- 🗑️ 删除不再使用的 `MCP~/mcp.template.json`
+
+---
+
 ## [1.2.5] - 2026-06-18
 
 ### 修复
@@ -54,14 +63,13 @@
 - 🤖 **MCP Bridge**
   - 支持通过 Named Pipe 连接 Unity Editor
   - 支持 Codex stdio MCP 接入
-  - 支持 VS Code SSE 分组服务
   - 提供 Bridge 状态面板和工具自检面板
 
 ### 变更
 - 🔧 工具入口统一收拢到 `XY Tools > 编辑器工具集`
 - 🔧 右键资源菜单统一到 `Assets/XY Hub Tools`
 - 📝 修正 Git URL 安装说明，支持 `?path=/Assets/XYHubTools`
-- 📝 补充 MCP Bridge 的 Codex / VS Code 配置说明
+- 📝 补充 MCP Bridge 的 Codex 配置说明
 - 🔧 MCP Bridge 安装配置时自动为当前 Unity 项目写入 Codex MCP server
 
 ### 修复

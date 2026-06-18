@@ -350,6 +350,7 @@ namespace Framework.XYEditor.GitPushWatcher
                 GitPushWatcherSettings.LastSeenRemoteHash = remoteHash;
                 GitPushWatcherSettings.LastSeenBranch = branch;
                 Log($"检测到 {behind} 个新 commit: {branch}", LogLevel.Info);
+                GitPushWatcherNotifier.ShowEvent(evt);
                 OnPushDetected?.Invoke(evt);
             }
         }

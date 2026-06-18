@@ -69,15 +69,12 @@ namespace Framework.XYEditor.GitPushWatcher
             GitPushWatcherService.OnTick += OnTick;
             GitPushWatcherService.OnLog -= OnLogMsg;
             GitPushWatcherService.OnLog += OnLogMsg;
-            GitPushWatcherService.OnPushDetected -= OnPush;
-            GitPushWatcherService.OnPushDetected += OnPush;
         }
 
         public void Cleanup()
         {
             GitPushWatcherService.OnTick -= OnTick;
             GitPushWatcherService.OnLog -= OnLogMsg;
-            GitPushWatcherService.OnPushDetected -= OnPush;
         }
 
         public void Draw(float containerWidth)
@@ -583,11 +580,6 @@ namespace Framework.XYEditor.GitPushWatcher
             _logs.Add(new LogEntry { Time = DateTime.Now, Message = msg, Level = level });
             if (_logs.Count > MAX_LOGS)
                 _logs.RemoveAt(0);
-        }
-
-        private void OnPush(PushEvent evt)
-        {
-            GitPushWatcherNotifier.ShowEvent(evt);
         }
 
         // ═══════════════════════════════════════════════════════════════════

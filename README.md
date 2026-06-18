@@ -76,7 +76,7 @@
 ### 方法 3: 指定版本安装
 
 ```json
-"com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git?path=/Assets/XYHubTools#v1.2.4"
+"com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git?path=/Assets/XYHubTools#v1.2.5"
 ```
 
 ## 🚀 快速开始
@@ -148,6 +148,9 @@ VS Code 使用 `.vscode/mcp.json` 的 SSE 配置。需要在 Bridge 面板启动
 欢迎提交 Issue 和 Pull Request！
 
 ## 📝 更新日志
+
+### v1.2.5 (2026-06-18)
+- 🐛 修复 Git 推送监听在未打开工具集窗口时不会弹出通知的问题
 
 ### v1.2.4 (2026-06-18)
 - 🔔 新增 Git 推送监听工具：只检测远端是否有新推送，并在 Unity 内弹出可拖动小窗提醒

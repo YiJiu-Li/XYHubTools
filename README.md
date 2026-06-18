@@ -43,6 +43,12 @@
 - 支持 Codex stdio 连接
 - 支持 VS Code SSE 分组服务
 
+### 🔔 Git 推送监听
+- 检测远端分支是否有新推送
+- 使用可拖动的非模态小窗提醒，不阻塞开发
+- 只执行 `git fetch` 和 refs 比对，不自动 pull / merge / rebase
+- 支持自定义仓库路径、远程名、追踪分支和轮询间隔
+
 ## 📦 安装
 
 ### 方法 1: 通过 Git URL 安装 (推荐)
@@ -70,7 +76,7 @@
 ### 方法 3: 指定版本安装
 
 ```json
-"com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git?path=/Assets/XYHubTools#v1.2.3"
+"com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git?path=/Assets/XYHubTools#v1.2.4"
 ```
 
 ## 🚀 快速开始
@@ -142,6 +148,9 @@ VS Code 使用 `.vscode/mcp.json` 的 SSE 配置。需要在 Bridge 面板启动
 欢迎提交 Issue 和 Pull Request！
 
 ## 📝 更新日志
+
+### v1.2.4 (2026-06-18)
+- 🔔 新增 Git 推送监听工具：只检测远端是否有新推送，并在 Unity 内弹出可拖动小窗提醒
 
 ### v1.2.3 (2026-06-17)
 - 🐛 Codex MCP 配置自动写入 `PYTHONIOENCODING=utf-8` 和 `PYTHONUTF8=1`

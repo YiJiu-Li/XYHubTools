@@ -5,6 +5,13 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.8] - 2026-06-18
+
+### 修复
+- 🐛 修复 MCP Bridge 重复点击「安装/更新配置」时，可能在 Codex `config.toml` 中留下重复 `.env` 子表，导致 Codex 报 `duplicate key` 的问题
+
+---
+
 ## [1.2.7] - 2026-06-18
 
 ### 修复

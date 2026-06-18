@@ -132,8 +132,13 @@ namespace Framework.XYEditor.Bridge
                     ? File.ReadAllText(configPath, Encoding.UTF8)
                     : "";
 
+                string escapedServerName = Regex.Escape(serverName);
                 string pattern =
-                    @"(?ms)^\[mcp_servers\." + Regex.Escape(serverName) + @"\]\s*.*?(?=^\[|\z)";
+                    @"(?ms)^\[mcp_servers\."
+                    + escapedServerName
+                    + @"\]\s*.*?(?:^\[mcp_servers\."
+                    + escapedServerName
+                    + @"\.env\]\s*.*?(?=^\[|\z))?";
                 if (Regex.IsMatch(config, pattern))
                     config = Regex.Replace(config, pattern, block.TrimEnd() + Environment.NewLine);
                 else

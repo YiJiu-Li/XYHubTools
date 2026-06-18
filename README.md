@@ -75,7 +75,7 @@
 ### 方法 3: 指定版本安装
 
 ```json
-"com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git?path=/Assets/XYHubTools#v1.2.7"
+"com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git?path=/Assets/XYHubTools#v1.2.8"
 ```
 
 ## 🚀 快速开始
@@ -141,6 +141,9 @@ startup_timeout_sec = 30
 欢迎提交 Issue 和 Pull Request！
 
 ## 📝 更新日志
+
+### v1.2.8 (2026-06-18)
+- 🐛 修复 MCP Bridge 重复安装配置可能导致 Codex `config.toml` 报 `duplicate key` 的问题
 
 ### v1.2.7 (2026-06-18)
 - 🐛 修复 Git 推送通知可能被误标记为已读导致没有弹窗的问题

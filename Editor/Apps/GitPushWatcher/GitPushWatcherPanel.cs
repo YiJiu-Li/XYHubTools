@@ -420,7 +420,7 @@ namespace Framework.XYEditor.GitPushWatcher
                     _branchText = "";
                     _remoteText = "origin";
                     _repoText = "";
-                    _autoDismissText = "30";
+                    _autoDismissText = "0";
                     GitPushWatcherService.RefreshPaths();
                 }
             }

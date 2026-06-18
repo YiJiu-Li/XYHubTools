@@ -31,6 +31,7 @@ namespace Framework.XYEditor.GitPushWatcher
         private GUIStyle _btnStyle;
         private GUIStyle _bgStyle;
         private Texture2D _bgTex;
+        private static GitPushWatcherNotifier s_current;
 
         // ── 静态入口 ──────────────────────────────────────────────────────
         public static void ShowEvent(PushEvent evt)
@@ -39,14 +40,23 @@ namespace Framework.XYEditor.GitPushWatcher
             if (GitPushWatcherSettings.NotifyStyle == NotifyStyle.LogOnly)
                 return;
 
-            var win = CreateInstance<GitPushWatcherNotifier>();
+            var win = s_current != null ? s_current : CreateInstance<GitPushWatcherNotifier>();
             win.titleContent = new GUIContent("Git 推送通知");
             win._event = evt;
             win._shownAt = EditorApplication.timeSinceStartup;
             win.RepositionToTopRight();
             win.minSize = new Vector2(WIN_W, WIN_H);
             win.maxSize = new Vector2(WIN_W, WIN_H + 60f);
-            win.ShowUtility();
+            if (s_current == null)
+            {
+                s_current = win;
+                win.ShowUtility();
+            }
+            else
+            {
+                win.Repaint();
+                win.Focus();
+            }
         }
 
         private void RepositionToTopRight()
@@ -88,6 +98,8 @@ namespace Framework.XYEditor.GitPushWatcher
 
         private void OnDisable()
         {
+            if (s_current == this)
+                s_current = null;
             if (_bgTex != null) DestroyImmediate(_bgTex);
         }
 
@@ -198,6 +210,7 @@ namespace Framework.XYEditor.GitPushWatcher
             GUI.enabled = oldEnabled;
             if (GUI.Button(new Rect(pad, btnY, w, btnH), "知道了", _btnStyle))
             {
+                GitPushWatcherService.Acknowledge(_event);
                 Close();
             }
             GUI.enabled = oldEnabled;

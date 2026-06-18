@@ -343,16 +343,30 @@ namespace Framework.XYEditor.GitPushWatcher
                 };
                 lock (s_lock)
                 {
-                    s_history.Insert(0, evt);
+                    bool exists = s_history.Exists(
+                        e =>
+                            string.Equals(e.RemoteHash, evt.RemoteHash, StringComparison.Ordinal)
+                            && string.Equals(e.Branch, evt.Branch, StringComparison.Ordinal)
+                    );
+                    if (!exists)
+                        s_history.Insert(0, evt);
                     if (s_history.Count > MAX_HISTORY)
                         s_history.RemoveAt(s_history.Count - 1);
                 }
-                GitPushWatcherSettings.LastSeenRemoteHash = remoteHash;
-                GitPushWatcherSettings.LastSeenBranch = branch;
                 Log($"检测到 {behind} 个新 commit: {branch}", LogLevel.Info);
                 GitPushWatcherNotifier.ShowEvent(evt);
                 OnPushDetected?.Invoke(evt);
             }
+        }
+
+        public static void Acknowledge(PushEvent evt)
+        {
+            if (evt == null)
+                return;
+
+            GitPushWatcherSettings.LastSeenRemoteHash = evt.RemoteHash;
+            GitPushWatcherSettings.LastSeenBranch = evt.Branch;
+            Log($"已确认远端推送提醒: {evt.Remote}/{evt.Branch} {evt.ShortHash}", LogLevel.Info);
         }
 
         private static void EmitTick()

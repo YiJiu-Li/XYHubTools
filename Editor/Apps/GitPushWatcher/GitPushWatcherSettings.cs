@@ -25,8 +25,8 @@ namespace Framework.XYEditor.GitPushWatcher
         private const string PREF_NOTIFY_STYLE = "XYGitWatcher_NotifyStyle";
         private const string PREF_NOTIFY_AUTO_DISMISS = "XYGitWatcher_NotifyAutoDismissSec";
         private const string PREF_REPO_OVERRIDE = "XYGitWatcher_RepoPathOverride";
-        private const string PREF_LAST_SEEN_HASH = "XYGitWatcher_LastSeenRemoteHash";
-        private const string PREF_LAST_SEEN_BRANCH = "XYGitWatcher_LastSeenBranch";
+        private const string PREF_LAST_SEEN_HASH = "XYGitWatcher_AcknowledgedRemoteHash";
+        private const string PREF_LAST_SEEN_BRANCH = "XYGitWatcher_AcknowledgedBranch";
 
         // ── 默认值 ───────────────────────────────────────────────────────
         private const bool DEFAULT_ENABLED = false;
@@ -35,7 +35,7 @@ namespace Framework.XYEditor.GitPushWatcher
         private const string DEFAULT_REMOTE = "origin";
         private const bool DEFAULT_AUTO_FETCH = true;
         private const NotifyStyle DEFAULT_NOTIFY_STYLE = NotifyStyle.FloatingWindow;
-        private const int DEFAULT_AUTO_DISMISS_SEC = 30;
+        private const int DEFAULT_AUTO_DISMISS_SEC = 0;
 
         // ===================================================================
         //  公开属性

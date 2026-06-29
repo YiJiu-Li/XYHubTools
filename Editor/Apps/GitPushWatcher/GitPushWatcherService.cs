@@ -329,6 +329,10 @@ namespace Framework.XYEditor.GitPushWatcher
             LastSnapshot = snapshot;
             EmitTick();
 
+            List<CommitEntry> commits = null;
+            if (behind > 0)
+                commits = FetchCommitDetails(repoRoot, localHash, remoteHash, behind);
+
             if (isNewPush)
             {
                 var evt = new PushEvent
@@ -340,6 +344,8 @@ namespace Framework.XYEditor.GitPushWatcher
                     CommitCount = behind,
                     DetectedAt = DateTime.Now,
                     Summary = logSummary,
+                    Commits = commits,
+                    PrimaryAuthor = commits != null && commits.Count > 0 ? commits[0].Author : "",
                 };
                 lock (s_lock)
                 {
@@ -357,6 +363,53 @@ namespace Framework.XYEditor.GitPushWatcher
                 GitPushWatcherNotifier.ShowEvent(evt);
                 OnPushDetected?.Invoke(evt);
             }
+        }
+
+        /// <summary>
+        /// 解析 remote 领先 local 的每个 commit 的作者 / 日期 / 标题。
+        /// 使用 %x00 作为字段分隔符（commit 信息中几乎不可能出现）。
+        /// </summary>
+        private static List<CommitEntry> FetchCommitDetails(string repoRoot, string localHash, string remoteHash, int maxCount)
+        {
+            var list = new List<CommitEntry>();
+            if (string.IsNullOrEmpty(repoRoot) || string.IsNullOrEmpty(localHash) || string.IsNullOrEmpty(remoteHash))
+                return list;
+
+            int n = Math.Min(maxCount, 20); // 最多 20 条，避免窗口过长
+            // 格式: hash\x00author\x00email\x00date(iso)\x00subject
+            // --date=iso-strict 给出严格 ISO-8601，跨平台一致
+            string fmt = "%H%x00%an%x00%ae%x00%aI%x00%s";
+            var result = RunGit(
+                repoRoot,
+                $"log --pretty=format:\"{fmt}\" -n {n} {QuoteArg(localHash)}..{QuoteArg(remoteHash)}"
+            );
+            if (!result.Ok || string.IsNullOrWhiteSpace(result.Stdout))
+                return list;
+
+            string[] lines = (result.Stdout ?? "").Split('\n');
+            foreach (var raw in lines)
+            {
+                string line = raw.TrimEnd('\r');
+                if (string.IsNullOrEmpty(line)) continue;
+                string[] parts = line.Split(new[] { '\0' }, 5);
+                if (parts.Length < 5) continue;
+
+                DateTime dt;
+                DateTime.TryParse(parts[3], System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AssumeLocal, out dt);
+
+                string hash = parts[0];
+                list.Add(new CommitEntry
+                {
+                    Hash = hash,
+                    ShortHash = hash.Length >= 7 ? hash.Substring(0, 7) : hash,
+                    Author = parts[1],
+                    AuthorEmail = parts[2],
+                    Date = dt,
+                    Subject = parts[4],
+                });
+            }
+            return list;
         }
 
         public static void Acknowledge(PushEvent evt)
@@ -691,7 +744,25 @@ namespace Framework.XYEditor.GitPushWatcher
         public int CommitCount;
         public DateTime DetectedAt;
         public string Summary;
+        /// <summary>每个 commit 的详细元数据（作者、日期、subject、hash）。可能为 null。</summary>
+        public List<CommitEntry> Commits;
+        /// <summary>最新一个 commit 的作者（用于通知窗口简略显示）。</summary>
+        public string PrimaryAuthor;
 
         public string ShortHash => string.IsNullOrEmpty(RemoteHash) ? "" : RemoteHash.Substring(0, Math.Min(7, RemoteHash.Length));
+    }
+
+    /// <summary>单条 commit 的元数据</summary>
+    public class CommitEntry
+    {
+        public string Hash;        // 完整 40 位 hash
+        public string ShortHash;   // 7 位短 hash
+        public string Author;      // 作者名
+        public string AuthorEmail; // 作者邮箱
+        public DateTime Date;      // 提交时间（本地时区）
+        public string Subject;     // commit 标题（首行）
+
+        public string DisplayAuthor => string.IsNullOrEmpty(Author) ? "" : Author;
+        public string DisplayTime => Date.ToString("yyyy-MM-dd HH:mm");
     }
 }

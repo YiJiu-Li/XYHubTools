@@ -76,7 +76,7 @@
 ### 方法 3: 指定版本安装
 
 ```json
-"com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git?path=/Assets/XYHubTools#v1.2.9"
+"com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git?path=/Assets/XYHubTools#v1.3.0"
 ```
 
 ## 🚀 快速开始
@@ -146,6 +146,12 @@ startup_timeout_sec = 30
 欢迎提交 Issue 和 Pull Request！
 
 ## 📝 更新日志
+
+### v1.3.0 (2026-06-29)
+- 🔔 Git 推送通知窗口显示每个 commit 的作者、时间、邮箱和完整标题（可滚动）
+- 🔔 通知窗口顶部多出"作者"行；高度按 commit 数量自动伸缩
+- 📁 设置面板「仓库路径」行新增「当前项目」按钮，一键填入当前 Unity 工程根
+- 🔧 commit 解析用 `git log --pretty=format` 一次拿到所有元数据，避免多次调用 git
 
 ### v1.2.9 (2026-06-18)
 - 🔧 MCP Bridge 恢复生成 VS Code 项目级 MCP 配置，使用 stdio，不再依赖 SSE

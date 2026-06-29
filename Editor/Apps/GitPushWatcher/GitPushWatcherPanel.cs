@@ -389,6 +389,13 @@ namespace Framework.XYEditor.GitPushWatcher
                 GitPushWatcherSettings.RepoPathOverride = newRepo;
                 GitPushWatcherService.RefreshPaths();
             }
+            if (GUILayout.Button("当前项目", GUILayout.Width(72)))
+            {
+                string projectRoot = System.IO.Path.GetDirectoryName(Application.dataPath) ?? "";
+                _repoText = projectRoot;
+                GitPushWatcherSettings.RepoPathOverride = projectRoot;
+                GitPushWatcherService.RefreshPaths();
+            }
             if (GUILayout.Button("浏览", GUILayout.Width(60)))
             {
                 string picked = EditorUtility.OpenFolderPanel("选择仓库根目录", _repoText, "");

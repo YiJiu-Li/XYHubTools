@@ -4,13 +4,15 @@
 //  设计要点：
 //    - 使用 ShowUtility() 独立窗口，可拖动，不阻塞主线程
 //    - 默认显示在主编辑器窗口右上角
-//    - 同一时刻最多 1 个通知，多条推送合并显示 "N 个新 commit"
+//    - 同一时刻最多 1 个通知窗口；多条推送合并显示 "N 个新 commit"
 //    - 到达 AutoDismiss 时间后自动隐藏（0 = 不自动消失）
 //    - 用户点击 "稍后处理" 即隐藏
 //    - 只做提醒，不在通知窗口里提供 pull / merge 等写操作
+//    - 显示作者、提交时间、完整 commit 标题；超出窗口高度时可滚动
 // =======================================================================
 
 using System;
+using System.Collections.Generic;
 using System.Text;
 using UnityEditor;
 using UnityEngine;
@@ -19,15 +21,19 @@ namespace Framework.XYEditor.GitPushWatcher
 {
     internal class GitPushWatcherNotifier : EditorWindow
     {
-        private const float WIN_W = 360f;
-        private const float WIN_H = 168f;
+        private const float WIN_W = 380f;
+        private const float WIN_H = 280f;
+        private const float MAX_WIN_H = 520f;
         private const float MARGIN = 12f;
 
         private PushEvent _event;
         private double _shownAt;
+        private Vector2 _scroll;
+
         private GUIStyle _titleStyle;
         private GUIStyle _bodyStyle;
         private GUIStyle _metaStyle;
+        private GUIStyle _subjectStyle;
         private GUIStyle _btnStyle;
         private GUIStyle _bgStyle;
         private Texture2D _bgTex;
@@ -44,9 +50,17 @@ namespace Framework.XYEditor.GitPushWatcher
             win.titleContent = new GUIContent("Git 推送通知");
             win._event = evt;
             win._shownAt = EditorApplication.timeSinceStartup;
-            win.RepositionToTopRight();
-            win.minSize = new Vector2(WIN_W, WIN_H);
-            win.maxSize = new Vector2(WIN_W, WIN_H + 60f);
+            win._scroll = Vector2.zero;
+
+            // 依据 commit 数量动态计算窗口高度
+            int commitRows = evt.Commits != null && evt.Commits.Count > 0
+                ? Math.Min(evt.Commits.Count, 6)
+                : Math.Min(evt.CommitCount, 6);
+            float dynamicH = Mathf.Clamp(170f + commitRows * 36f, WIN_H, MAX_WIN_H);
+
+            win.minSize = new Vector2(WIN_W, dynamicH);
+            win.maxSize = new Vector2(WIN_W, dynamicH + 40f);
+            win.RepositionToTopRight(dynamicH);
             if (s_current == null)
             {
                 s_current = win;
@@ -59,7 +73,7 @@ namespace Framework.XYEditor.GitPushWatcher
             }
         }
 
-        private void RepositionToTopRight()
+        private void RepositionToTopRight(float h)
         {
             // 找最大的 EditorWindow 作为参考（通常是主编辑器窗口）
             EditorWindow main = null;
@@ -87,7 +101,7 @@ namespace Framework.XYEditor.GitPushWatcher
                 x = Screen.currentResolution.width - WIN_W - MARGIN;
                 y = MARGIN;
             }
-            position = new Rect(x, y, WIN_W, WIN_H);
+            position = new Rect(x, y, WIN_W, h);
         }
 
         // ── 生命周期 ──────────────────────────────────────────────────────
@@ -129,7 +143,15 @@ namespace Framework.XYEditor.GitPushWatcher
             _metaStyle = new GUIStyle(EditorStyles.miniLabel)
             {
                 fontSize = 10,
+                richText = true,
                 normal = { textColor = metaCol },
+            };
+            _subjectStyle = new GUIStyle(EditorStyles.label)
+            {
+                fontSize = 11,
+                richText = true,
+                wordWrap = true,
+                normal = { textColor = bodyCol },
             };
             _btnStyle = new GUIStyle(GUI.skin.button)
             {
@@ -173,47 +195,34 @@ namespace Framework.XYEditor.GitPushWatcher
             float w = position.width - pad * 2;
             float y = 10f;
 
-            // 标题
+            // ── 标题 ────────────────────────────────────────────────────
             string title = "📥 检测到远程推送";
             GUI.Label(new Rect(pad, y, w, 22), title, _titleStyle);
-            y += 26;
+            y += 24;
 
-            // 主体
+            // ── 主体：分支 + 提交数 + 检出时间 ───────────────────────────
+            string authorTag = string.IsNullOrEmpty(_event.PrimaryAuthor)
+                ? ""
+                : $"   作者 <b>{_event.PrimaryAuthor}</b>";
             string body =
-                $"<b>{_event.Remote}/{_event.Branch}</b>  领先本地 <b>{_event.CommitCount}</b> 个 commit\n"
+                $"<b>{_event.Remote}/{_event.Branch}</b>  领先本地 <b>{_event.CommitCount}</b> 个 commit{authorTag}\n"
                 + $"最新: <color=#7fbfff>{_event.ShortHash}</color>   检出: {DateTime.Now:HH:mm:ss}";
-            GUI.Label(new Rect(pad, y, w, 38), body, _bodyStyle);
-            y += 42;
+            float bodyH = _bodyStyle.CalcHeight(new GUIContent(body), w);
+            GUI.Label(new Rect(pad, y, w, bodyH), body, _bodyStyle);
+            y += bodyH + 6;
 
-            // 提交摘要（最多 3 行）
-            if (!string.IsNullOrWhiteSpace(_event.Summary))
-            {
-                var sb = new StringBuilder();
-                string[] lines = _event.Summary.Split('\n');
-                int n = Math.Min(3, lines.Length);
-                for (int i = 0; i < n; i++)
-                {
-                    string line = lines[i].TrimEnd();
-                    if (line.Length > 60) line = line.Substring(0, 60) + "...";
-                    sb.AppendLine("• " + line);
-                }
-                float summaryH = n * 16f + 4f;
-                GUI.Label(new Rect(pad, y, w, summaryH), sb.ToString(), _metaStyle);
-                y += summaryH;
-            }
+            // ── Commit 详细列表（可滚动）────────────────────────────────
+            float listH = Mathf.Max(0f, position.height - y - 40f);
+            DrawCommitList(pad, y, w, listH);
 
-            // 按钮：只确认，不做 pull / merge 等写操作
+            // ── 底部按钮 ────────────────────────────────────────────────
             float btnY = position.height - 34f;
             float btnH = 24f;
-
-            var oldEnabled = GUI.enabled;
-            GUI.enabled = oldEnabled;
             if (GUI.Button(new Rect(pad, btnY, w, btnH), "知道了", _btnStyle))
             {
                 GitPushWatcherService.Acknowledge(_event);
                 Close();
             }
-            GUI.enabled = oldEnabled;
 
             // 让 ESC 关掉
             if (Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Escape)
@@ -222,5 +231,88 @@ namespace Framework.XYEditor.GitPushWatcher
                 Event.current.Use();
             }
         }
+
+        private void DrawCommitList(float pad, float y, float w, float h)
+        {
+            // 没有详细 commits 时回退到原来的 Summary 文本
+            if (_event.Commits == null || _event.Commits.Count == 0)
+            {
+                if (string.IsNullOrWhiteSpace(_event.Summary)) return;
+                _scroll = GUI.BeginScrollView(new Rect(pad, y, w, h), _scroll,
+                    new Rect(0, 0, w - 16, CalcSummaryHeight(w)));
+                var sb = new StringBuilder();
+                string[] lines = _event.Summary.Split('\n');
+                int n = Math.Min(5, lines.Length);
+                for (int i = 0; i < n; i++)
+                {
+                    string line = lines[i].TrimEnd();
+                    if (line.Length > 70) line = line.Substring(0, 70) + "...";
+                    sb.AppendLine("• " + line);
+                }
+                GUI.Label(new Rect(0, 0, w - 16, n * 16f + 4f), sb.ToString(), _metaStyle);
+                GUI.EndScrollView();
+                return;
+            }
+
+            float contentH = CalcCommitListHeight(_event.Commits, w);
+            _scroll = GUI.BeginScrollView(new Rect(pad, y, w, h), _scroll,
+                new Rect(0, 0, w - 16, contentH));
+
+            float cy = 0f;
+            int shown = 0;
+            foreach (var c in _event.Commits)
+            {
+                DrawCommitRow(c, 0, cy, w - 16);
+                cy += CommitRowHeight(c, w - 16) + 4f;
+                shown++;
+            }
+            if (shown < _event.CommitCount)
+            {
+                string more = $"… 还有 {_event.CommitCount - shown} 个 commit 未显示";
+                GUI.Label(new Rect(0, cy, w - 16, 18), more, _metaStyle);
+            }
+            GUI.EndScrollView();
+        }
+
+        private float CalcSummaryHeight(float w)
+        {
+            int n = string.IsNullOrEmpty(_event?.Summary) ? 0 : Math.Min(5, _event.Summary.Split('\n').Length);
+            return n * 16f + 4f;
+        }
+
+        private float CalcCommitListHeight(List<CommitEntry> commits, float w)
+        {
+            float total = 0f;
+            foreach (var c in commits)
+                total += CommitRowHeight(c, w) + 4f;
+            return total + 18f; // 末尾 “还有 N 个” 提示
+        }
+
+        private float CommitRowHeight(CommitEntry c, float w)
+        {
+            // 第 1 行: hash + 时间   ~14
+            // 第 2 行: 作者         ~14
+            // 第 3 行: subject（可换行）~ CalcHeight
+            float subjectH = _subjectStyle.CalcHeight(new GUIContent(c.Subject ?? ""), w);
+            return 14f + 14f + subjectH + 4f;
+        }
+
+        private void DrawCommitRow(CommitEntry c, float x, float y, float w)
+        {
+            // 第 1 行：hash + 时间
+            string line1 = $"<b>{c.ShortHash}</b>   <color=#888888>{c.DisplayTime}</color>";
+            GUI.Label(new Rect(x, y, w, 14), line1, _metaStyle);
+
+            // 第 2 行：作者
+            string author = string.IsNullOrEmpty(c.AuthorEmail)
+                ? c.DisplayAuthor
+                : $"{c.DisplayAuthor} <color=#888888>&lt;{c.AuthorEmail}&gt;</color>";
+            GUI.Label(new Rect(x, y + 14, w, 14), author, _metaStyle);
+
+            // 第 3 行：subject
+            float subjectH = _subjectStyle.CalcHeight(new GUIContent(c.Subject ?? ""), w);
+            GUI.Label(new Rect(x, y + 28, w, subjectH), c.Subject ?? "", _subjectStyle);
+        }
     }
 }
+

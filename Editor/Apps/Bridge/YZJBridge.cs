@@ -25,6 +25,9 @@ namespace Framework.XYEditor.Bridge
         // ───────────────── 常量 ─────────────────
         private const int MaxMainThreadActionsPerUpdate = 32;
 
+        /// <summary>自动启动是否已尝试过（每次域重载重置；用户手动停止后不会被拉起）。</summary>
+        private static bool _autoStartAttempted;
+
         // ───────────────── 主线程队列 ─────────────────
         private static readonly object _mainThreadQueueLock = new object();
         private static readonly Queue<Action> _mainThreadQueue = new Queue<Action>(64);
@@ -40,6 +43,9 @@ namespace Framework.XYEditor.Bridge
 
         static YZJBridge()
         {
+            // 主线程预热工程 define 快照：后台编译若先跑，读到的会是空集，
+            // #if UNITY_EDITOR / ENABLE_INPUT_SYSTEM 等区域会解析到错误分支。
+            CompilationService.SnapshotProjectDefines();
             ConsoleService.EnsureHooked();
             EditorApplication.update += PumpMainThreadQueue;
             EditorApplication.delayCall += Start;
@@ -71,6 +77,19 @@ namespace Framework.XYEditor.Bridge
 
         private static void PumpMainThreadQueue()
         {
+            // 自动启动兜底：原来只靠 EditorApplication.delayCall 启动，
+            // 但它是「一次性 + 只在编辑器正常 tick 时触发」——编辑器失焦被节流、
+            // 或某些域重载时序下会直接不触发，Bridge 就静悄悄地不起来了
+            // （官方 CLI 用 set_autotick 解决的是同一类节流问题）。
+            // 这里挂在 update 上：编辑器真的在 tick 时才启动，语义正好。
+            // 只尝试一次，用户手动「停止」后不会被反复拉起。
+            if (!_autoStartAttempted)
+            {
+                _autoStartAttempted = true;
+                if (!PipeServer.IsRunning)
+                    Start();
+            }
+
             RefreshCachedEditorState();
             if (CodeExecutionService.ActiveAsyncCount > 0)
                 CodeExecutionService.PumpRuntime();

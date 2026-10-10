@@ -2,8 +2,10 @@
 
 > Unity 编辑器工具集合 - 提升开发效率的实用工具套件
 
-[![Unity Version](https://img.shields.io/badge/Unity-2021.3%2B-blue)](https://unity.com/)
+[![Unity Version](https://img.shields.io/badge/Unity-2022.3%2B-blue)](https://unity.com/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
+XY 自有代码使用 MIT；随附 Pipeline 及第三方组件遵循各自许可证，详见 [Pipeline 分发说明](Pipeline~/README.md)。
 
 ## ✨ 功能特性
 
@@ -39,6 +41,9 @@
 
 ### 🤖 MCP Bridge
 - 通过 MCP 让 AI Agent 查询和操作 Unity Editor
+- 提供 28 个 `unity_*` 工具：C# 代码执行、场景/组件读写、Prefab 结构、资源管理、Console、截图、事件订阅、多工程切换
+- `unity_cli` 直接通过 HTTP 调用 `com.unity.pipeline` 的 **160 个命令**（构建、测试、烘焙、动画、Project Settings、包管理等），
+  两条通道互不影响
 - 支持 Named Pipe 本地桥接
 - 支持 Codex stdio 连接
 - 支持 VS Code stdio 连接
@@ -58,7 +63,7 @@
 3. 选择 `Add package from git URL...`
 4. 输入:
    ```
-   https://github.com/YiJiu-Li/XYHubTools.git?path=/Assets/XYHubTools
+   https://github.com/YiJiu-Li/XYHubTools.git
    ```
 
 ### 方法 2: 通过 manifest.json 安装
@@ -68,7 +73,7 @@
 ```json
 {
   "dependencies": {
-    "com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git?path=/Assets/XYHubTools"
+    "com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git"
   }
 }
 ```
@@ -76,7 +81,7 @@
 ### 方法 3: 指定版本安装
 
 ```json
-"com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git?path=/Assets/XYHubTools#v1.3.0"
+"com.yzj.xyhubtools": "https://github.com/YiJiu-Li/XYHubTools.git#v1.6.0"
 ```
 
 ## 🚀 快速开始
@@ -104,35 +109,81 @@
 
 1. 在工具中心选择 **MCP Bridge**
 2. 点击 **启动管道**
-3. 点击 **安装/更新配置**
+3. 点击 **安装 / 更新 MCP（一次性）**
 4. 安装 Python 依赖:
    ```bash
    pip install pywin32
    ```
 
-#### Codex
+#### Pipeline：只引入 XY，无需 Unity CLI
 
-点击 Bridge 面板的 **安装/更新配置** 后，插件会把当前 Unity 项目写入用户级 Codex 配置：
+XY 随附当前维护的 Pipeline 安装包。首次加载时，缺少 `com.unity.pipeline` 的项目
+会通过 Unity Package Manager 自动安装；已有 Pipeline 保留，不覆盖。依赖由 UPM
+解析，首次安装可能需要网络。面板显示安装状态，可点 **检查 / 重试**；也可用
+`Tools > XY Hub > 检查或安装 Pipeline`。
+
+MCP 直接访问目标项目的 Pipeline HTTP 服务，不再寻找或启动 `unity.exe`：
+
+| 工具 | 用法 |
+|---|---|
+| `unity_cli` | 保留旧入口，例如 `{"spec":"editor_status"}`；空 spec 返回精简命令列表 |
+| `unity_pipeline` | 结构化调用，例如 `{"command":"editor_status","parameters":{}}` |
+| `unity_pipeline_commands` | 查看命令参数，例如 `{"command":"eval"}` |
+
+命令参数由 Pipeline 自己解析，端口和认证令牌从当前目标项目读取。切换工程后不复用
+旧项目的连接信息。构建、测试等异步命令仍需查询对应 `*_status`；连接超时不会自动
+重复执行命令，以免重复修改资源。Pipeline 失败结果会返回 MCP `isError: true`。
+旧 `unity_cli` 名称仅作为兼容入口，不支持 CLI 自身的全局选项或 Player 目标选择。
+
+当前随附版本为 `0.8.0-xy.1`，兼容基线为 Unity 2022.3；其他 Unity 版本的适配尚未
+在这里承诺。Python + pywin32 仍是 Bridge 的运行前提。更新包后需更新 MCP 脚本并
+重启 MCP 服务，才能使用新入口。
+
+团队项目请一并提交自动生成的 `Packages/XYBridge~/`、`Packages/manifest.json`
+和 `Packages/packages-lock.json`。已有 Pipeline 不自动升级；升级随附版本的方法见
+[Pipeline 分发说明](Pipeline~/README.md)。
+
+#### 配置只写一次（Hub 模式）
+
+点击 **安装 / 更新 MCP（一次性）** 后，插件会把 `xy_mcp_server.py` 安装到与工程无关的固定位置：
+
+```
+%USERPROFILE%\.xybridge\xy_mcp_server.py
+```
+
+该脚本会**自动发现所有存活的 Unity 管道**，因此 MCP 配置只需写一次，
+之后把插件导入任何新工程都不用再改。安装时会同时写入三处（均为单条 `xybridge`）：
+
+| 客户端 | 位置 |
+|---|---|
+| Codex | `~/.codex/config.toml` → `[mcp_servers.xybridge]` |
+| VS Code | `<工程>/.vscode/mcp.json` |
+| WorkBuddy | `~/.workbuddy-ai/mcp.json` |
 
 ```toml
-[mcp_servers.xybridge_项目名]
+[mcp_servers.xybridge]
 command = "python"
-args = ["xy_mcp_server.py", "--transport=stdio"]
-cwd = "你的 Unity 项目根目录"
+args = ["C:\\Users\\<你>\\.xybridge\\xy_mcp_server.py", "--transport=stdio"]
 startup_timeout_sec = 30
 ```
 
-每个 Unity 项目会生成自己的 MCP server 名称，避免多个项目都连接到同一个固定项目。
+> 旧版本按工程生成的 `xybridge_<工程名>` 条目会在安装时自动清理，配置不再随工程数量增长。
 
-修改后需要重启 Codex 或新开项目线程，当前会话通常不会热加载新增 MCP。
+修改后需要重启客户端或新开会话，当前会话通常不会热加载新增 MCP。
 
-#### VS Code
+#### 同时开着多个 Unity 工程
 
-点击 Bridge 面板的 **安装/更新配置** 后，插件会生成项目级 `.vscode/mcp.json`。VS Code 使用 stdio 连接，不需要启动 SSE 服务。
+Hub 会自动发现所有实例：
+
+- `unity_list_projects` — 列出所有存活的 Unity（工程路径、PID、当前绑定）
+- `unity_use_project "<工程名或路径片段>"` — 切换目标
+
+只有一个实例存活时自动绑定；**多个实例且未指定时会报错并列出候选，不会乱猜**。
+也可以用 `--project=<关键字>` 参数或 `XYBRIDGE_PROJECT` 环境变量固定目标。
 
 ## 📋 系统要求
 
-- Unity 2021.3 或更高版本
+- Unity 2022.3（当前验证基线，其他版本需另行适配）
 - .NET Framework 4.x 或更高
 - 基础编辑器工具支持 Windows / macOS / Linux
 - MCP Bridge 当前使用 Windows Named Pipe，需要 Windows + Python + pywin32
@@ -146,6 +197,16 @@ startup_timeout_sec = 30
 欢迎提交 Issue 和 Pull Request！
 
 ## 📝 更新日志
+
+### v1.5.0 (2026-09-29)
+- 🔗 MCP Bridge 改为 **Hub 模式**：server 自动发现所有存活的 Unity 管道，脚本安装到固定位置 `~/.xybridge/`，**MCP 配置只写一次**，导入新工程无需再改
+- 🧩 新增 `unity_list_projects`（列出所有 Unity 实例及工程路径/PID）与 `unity_use_project`（多开时切换目标），工具数 23 → 25
+- 🐛 修复 `unity_ping` 恒返回 `PID: 0`；`status` / `ping` 现在回传工程路径（`projectPath`）
+
+### v1.4.0 (2026-09-29)
+- 🧩 MCP Bridge 新增 `unity_set_property`（改组件属性，走 Undo）和 `unity_get_prefab_structure`（读 Prefab 结构），工具数 21 → 23
+- ⚡ Python 侧复用长连接，不再每次工具调用后断开重连
+- 🐛 统一 JSON 转义，修复对象名含引号/反斜杠时产出非法 JSON 的问题
 
 ### v1.3.0 (2026-06-29)
 - 🔔 Git 推送通知窗口显示每个 commit 的作者、时间、邮箱和完整标题（可滚动）

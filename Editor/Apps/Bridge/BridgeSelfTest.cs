@@ -1,19 +1,30 @@
 // ═══════════════════════════════════════════════════════════════
-//  BridgeSelfTest — 21 个 MCP 工具的本地自检
+//  BridgeSelfTest — Unity 侧后端与 Pipeline HTTP 自检
 //  直接调用 Bridge 后端服务（绕开 stdio 传输链路）
 //  入口：XYHub > MCP Bridge 面板
 //
-//  22 → 21 调整：
+//  注：MCP 层共 25 个工具，其中 unity_list_projects / unity_use_project
+//      是纯客户端工具（只操作命名管道，不经过 Unity 管道协议），
+//      因此不在本自检范围内。
+//
+//  历史调整：
 //    删：unity_log / unity_warn / unity_error
-//        unity_set_property / unity_get_prefab_structure
 //    降：unity_run_tests
 //        unity_play_mode（enter/exit 禁用，仅读状态）
 //    加：unity_subscribe / unity_poll_events / unity_screenshot_to_file
+//    恢复：unity_set_property / unity_get_prefab_structure
+//          （已接线到 MessageDispatcher 的 set_property / get_prefab_structure）
+//
+//  破坏性用例（Destructive=true）：会重新导入资源 / 刷新 AssetDatabase，
+//  可能触发域重载或场景刷新而打断本轮自检。默认「运行全部」跳过它们，
+//  需在面板勾选「含破坏性用例」才执行。
+//  自检结果由面板写入 SessionState，域重载后可恢复显示。
 // ═══════════════════════════════════════════════════════════════
 
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Threading.Tasks;
 using UnityEditor;
 using UnityEditor.Compilation;
 using UnityEditor.SceneManagement;
@@ -23,6 +34,7 @@ namespace Framework.XYEditor.Bridge
 {
     public static class BridgeSelfTest
     {
+        [Serializable]
         public class Result
         {
             public int Idx;
@@ -39,12 +51,20 @@ namespace Framework.XYEditor.Bridge
             public string Name;
             public string Group;
             public Func<string> Run;
+            public Func<Task<string>> RunAsync;
             public string Hint;
+
+            /// <summary>
+            /// 会改变编辑器状态（重新导入资源 / 刷新 AssetDatabase / 改场景），
+            /// 可能触发域重载或场景刷新，从而打断本轮自检、使面板被重建。
+            /// 默认「运行全部」会跳过这些用例，需显式勾选「含破坏性用例」才执行。
+            /// </summary>
+            public bool Destructive;
         }
 
         private static List<TestCase> _all;
 
-        /// <summary>21 个 MCP 工具的 case 定义。</summary>
+        /// <summary>Bridge 后端与 Pipeline HTTP 用例（不含纯客户端的多工程工具）。</summary>
         public static List<TestCase> AllCases
         {
             get
@@ -134,7 +154,8 @@ namespace Framework.XYEditor.Bridge
                             );
                             return "ok";
                         },
-                        Hint = "强制重新导入 SampleScene",
+                        Hint = "强制重新导入 SampleScene（会刷新场景）",
+                        Destructive = true,
                     },
                     new TestCase
                     {
@@ -146,7 +167,8 @@ namespace Framework.XYEditor.Bridge
                             AssetDatabase.Refresh();
                             return "ok";
                         },
-                        Hint = "刷新 AssetDatabase",
+                        Hint = "刷新 AssetDatabase（脚本有变动时会重编译）",
+                        Destructive = true,
                     },
                     new TestCase
                     {
@@ -155,11 +177,14 @@ namespace Framework.XYEditor.Bridge
                         Group = "assets",
                         Run = () =>
                         {
+                            // 刻意不调用 CompilationPipeline.RequestScriptCompilation()：
+                            // 它会触发域重载，把自检面板整个重建、结果丢失。
+                            // 这里只验证编译服务可调用、引用收集可用。
                             CompilationService.InvalidateCache();
-                            CompilationPipeline.RequestScriptCompilation();
-                            return "triggered";
+                            var refs = CompilationService.EnsureReferences();
+                            return refs != null ? "refs=" + refs.Count : "refs=null";
                         },
-                        Hint = "触发脚本重编译",
+                        Hint = "验证编译服务与引用收集（不触发实际重编译）",
                     },
                     new TestCase
                     {
@@ -315,9 +340,73 @@ namespace Framework.XYEditor.Bridge
                         Run = () => "{\"sub\":\"" + EventBus.Unsubscribe() + "\"}",
                         Hint = "清空订阅、丢弃队列",
                     },
+                    // ===== scene 组（写操作）=====
+                    new TestCase
+                    {
+                        Idx = 22,
+                        Name = "unity_set_property",
+                        Group = "scene",
+                        Run = () =>
+                        {
+                            // 用临时 GameObject 测真实写入，避免动用户场景里的对象，测完立即销毁。
+                            // 场景会被标记为已修改，属预期副作用（不保存即可丢弃）。
+                            const string goName = "__XYBridgeSelfTest__";
+                            var go = new GameObject(goName);
+                            try
+                            {
+                                string r = ComponentService.SetProperty(
+                                    goName + "|Transform.localPosition|4,5,6"
+                                );
+                                var p = go.transform.localPosition;
+                                bool written =
+                                    Mathf.Approximately(p.x, 4f)
+                                    && Mathf.Approximately(p.y, 5f)
+                                    && Mathf.Approximately(p.z, 6f);
+                                return written ? "ok localPosition=" + p : "not applied: " + r;
+                            }
+                            finally
+                            {
+                                UnityEngine.Object.DestroyImmediate(go);
+                            }
+                        },
+                        Hint = "用临时对象测组件写入，测完销毁",
+                    },
+                    // ===== assets 组（Prefab）=====
+                    new TestCase
+                    {
+                        Idx = 23,
+                        Name = "unity_get_prefab_structure",
+                        Group = "assets",
+                        Run = () =>
+                        {
+                            var guids = AssetDatabase.FindAssets("t:Prefab");
+                            if (guids.Length == 0)
+                                return "no prefab in project";
+                            string path = AssetDatabase.GUIDToAssetPath(guids[0]);
+                            string r = ComponentService.GetPrefabStructure(path);
+                            return r.Length > 80 ? r.Substring(0, 80) + "..." : r;
+                        },
+                        Hint = "读取项目里第一个 Prefab 的结构",
+                    },
                 };
+                _all.AddRange(PipelineSelfTest.Cases());
                 return _all;
             }
+        }
+
+        public static async Task<Result> RunOneAsync(TestCase c)
+        {
+            if (c.RunAsync == null) return RunOne(c);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var result = new Result { Idx = c.Idx, Name = c.Name, Group = c.Group };
+            try
+            {
+                result.Detail = await c.RunAsync();
+                result.Ok = !string.IsNullOrEmpty(result.Detail);
+            }
+            catch (Exception e) { result.Detail = e.GetType().Name + ": " + e.Message; }
+            result.ElapsedMs = sw.Elapsed.TotalMilliseconds;
+            return result;
         }
 
         /// <summary>运行单个 case，返回 Result。</summary>
@@ -328,6 +417,8 @@ namespace Framework.XYEditor.Bridge
             string detail = "";
             try
             {
+                if (c.RunAsync != null)
+                    throw new InvalidOperationException("HTTP 自检请使用 RunOneAsync，不能阻塞 Unity 主线程。");
                 detail = c.Run() ?? "";
                 ok = !string.IsNullOrEmpty(detail);
             }
@@ -348,21 +439,39 @@ namespace Framework.XYEditor.Bridge
             };
         }
 
-        /// <summary>全量跑一遍，返回 List&lt;Result&gt;。</summary>
-        public static List<Result> RunAll()
+        /// <summary>
+        /// 全量跑一遍，返回 List&lt;Result&gt;。
+        /// includeDestructive=false 时跳过会触发域重载 / 场景刷新的用例。
+        /// </summary>
+        public static List<Result> RunAll(bool includeDestructive = true)
         {
             var results = new List<Result>();
             foreach (var c in AllCases)
+            {
+                if (c.Destructive && !includeDestructive)
+                    continue;
                 results.Add(RunOne(c));
+            }
             return results;
         }
 
-        public static void Run()
+        public static async Task<List<Result>> RunAllAsync(bool includeDestructive = false)
         {
-            var results = RunAll();
+            var results = new List<Result>();
+            foreach (var c in AllCases)
+            {
+                if (c.Destructive && !includeDestructive) continue;
+                results.Add(await RunOneAsync(c));
+            }
+            return results;
+        }
+
+        public static async void Run()
+        {
+            var results = await RunAllAsync();
             int passed = 0;
             var report = new StringBuilder();
-            report.AppendLine("═══ Bridge Self Test: 21 Tools ═══");
+            report.AppendLine($"═══ Bridge Self Test: {results.Count} Tools ═══");
             foreach (var r in results)
             {
                 string mark = r.Ok ? "✅" : "❌";

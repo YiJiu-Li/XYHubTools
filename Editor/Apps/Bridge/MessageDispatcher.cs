@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  MessageDispatcher — 消息路由与处理（11 种消息类型）
+//  MessageDispatcher — 消息路由与处理（25 种消息类型）
 // ═══════════════════════════════════════════════════════════════
 
 using System;
@@ -22,17 +22,27 @@ namespace Framework.XYEditor.Bridge
                 switch (msg.type)
                 {
                     case "ping":
-                        return YZJBridge.Ok(reqId, "pong");
+                    {
+                        // 把进程号与工程路径带在响应里：Python 侧 unity_ping /
+                        // unity_list_projects 读的是响应，不填的话恒为默认值
+                        var pong = YZJBridge.Ok(reqId, "pong");
+                        pong.processId = PipeServer.EditorProcessId;
+                        pong.projectPath = PipeServer.ProjectRoot;
+                        return pong;
+                    }
                     case "status":
                     {
                         string s = YZJBridge.IsPlaying
                             ? (YZJBridge.IsPaused ? "playing_paused" : "playing")
                             : "editing";
                         string scene = YZJBridge.ActiveScenePath ?? "";
-                        return YZJBridge.Ok(
+                        var st = YZJBridge.Ok(
                             reqId,
                             s + (string.IsNullOrEmpty(scene) ? "" : " " + scene)
                         );
+                        st.processId = PipeServer.EditorProcessId;
+                        st.projectPath = PipeServer.ProjectRoot;
+                        return st;
                     }
                     case "execute_code":
                         return await CodeExecutionService.HandleAsync(
@@ -164,13 +174,11 @@ namespace Framework.XYEditor.Bridge
                                 else
                                     tcs.SetResult(
                                         "{\"selected\":{\"name\":\""
-                                            + sel.name.Replace("\\", "\\\\").Replace("\"", "\\\"")
+                                            + JsonEscape.String(sel.name)
                                             + "\",\"type\":\""
-                                            + sel.GetType().Name
+                                            + JsonEscape.String(sel.GetType().Name)
                                             + "\",\"path\":\""
-                                            + (AssetDatabase.GetAssetPath(sel) ?? "")
-                                                .Replace("\\", "\\\\")
-                                                .Replace("\"", "\\\"")
+                                            + JsonEscape.String(AssetDatabase.GetAssetPath(sel) ?? "")
                                             + "\",\"instanceId\":"
                                             + sel.GetInstanceID()
                                             + "}}"
@@ -205,7 +213,7 @@ namespace Framework.XYEditor.Bridge
                                     sb.Append("{\"guid\":\"")
                                         .Append(guids[i])
                                         .Append("\",\"path\":\"")
-                                        .Append(p.Replace("\\", "\\\\").Replace("\"", "\\\""))
+                                        .Append(JsonEscape.String(p))
                                         .Append("\"}");
                                 }
                                 sb.Append("]}");
@@ -351,6 +359,43 @@ namespace Framework.XYEditor.Bridge
                             try
                             {
                                 tcs.SetResult(ComponentService.GetComponent(spec));
+                            }
+                            catch (Exception ex)
+                            {
+                                tcs.SetException(ex);
+                            }
+                        });
+                        return YZJBridge.Ok(reqId, await tcs.Task);
+                    }
+                    case "set_property":
+                    {
+                        // message 格式: "目标名称|属性路径|值"
+                        var tcs = new TaskCompletionSource<string>();
+                        string spec = msg.message ?? "";
+                        YZJBridge.PostToMainThread(() =>
+                        {
+                            try
+                            {
+                                tcs.SetResult(ComponentService.SetProperty(spec));
+                            }
+                            catch (Exception ex)
+                            {
+                                tcs.SetException(ex);
+                            }
+                        });
+                        return YZJBridge.Ok(reqId, await tcs.Task);
+                    }
+                    // ═══════════════════════════════════════════════════
+                    //  Prefab
+                    case "get_prefab_structure":
+                    {
+                        var tcs = new TaskCompletionSource<string>();
+                        string assetPath = msg.message ?? "";
+                        YZJBridge.PostToMainThread(() =>
+                        {
+                            try
+                            {
+                                tcs.SetResult(ComponentService.GetPrefabStructure(assetPath));
                             }
                             catch (Exception ex)
                             {

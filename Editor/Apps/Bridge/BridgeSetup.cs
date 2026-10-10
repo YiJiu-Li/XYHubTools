@@ -1,19 +1,34 @@
 // ═══════════════════════════════════════════════════════════════
 //  BridgeSetup — MCP Bridge 安装配置（由 XYHub 面板调用）
-//  将 Python MCP Server 复制到项目根目录，并写入 Codex / VS Code stdio 配置
+//
+//  Hub 模式：把 xy_mcp_server.py 安装到与工程无关的固定位置
+//      %USERPROFILE%\.xybridge\xy_mcp_server.py
+//  该脚本会自动发现所有存活的 Unity 管道（见其头部说明），因此：
+//    · MCP 配置只需写一次，之后导入任何新工程都不用再改
+//    · 同时开着多个 Unity 时，用 unity_list_projects / unity_use_project 切换目标
+//
+//  写入的配置：
+//    · Codex    ~/.codex/config.toml        （单条 [mcp_servers.xybridge]）
+//    · VS Code  <工程>/.vscode/mcp.json     （单条，指向固定脚本）
+//    · WorkBuddy ~/.workbuddy-ai/mcp.json   （单条，交由 python --install-config 合并）
 // ═══════════════════════════════════════════════════════════════
 
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
+using Debug = UnityEngine.Debug;
 
 namespace Framework.XYEditor.Bridge
 {
     public static class BridgeSetup
     {
+        /// <summary>固定的 MCP server 名（不再按工程名区分，避免配置随工程增长）。</summary>
+        public const string StableServerName = "xybridge";
+
         /// <summary>
         /// MCP~ 目录路径。
         /// 优先从 UPM 包路径解析（发布后），失败则回退到 Assets/XYHubTools/MCP~/（本地开发）。
@@ -22,7 +37,6 @@ namespace Framework.XYEditor.Bridge
         {
             get
             {
-                // 优先从 UPM 包路径解析（发布后），失败回退 Assets 本地路径
                 var info = UnityEditor.PackageManager.PackageInfo.FindForPackageName(
                     "com.yzj.xyhubtools"
                 );
@@ -37,6 +51,15 @@ namespace Framework.XYEditor.Bridge
         }
 
         private static string ProjectRoot => Path.GetDirectoryName(Application.dataPath);
+
+        private static string UserProfile =>
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        /// <summary>Hub 脚本的固定安装目录（与任何工程无关）。</summary>
+        internal static string StableDir => Path.Combine(UserProfile, ".xybridge");
+
+        /// <summary>Hub 脚本的固定安装路径。</summary>
+        internal static string StableScript => Path.Combine(StableDir, "xy_mcp_server.py");
 
         // ═══════════════════════════════════════════════════════════
         //  XYHub 面板入口
@@ -57,28 +80,34 @@ namespace Framework.XYEditor.Bridge
             bool pyOk = CopyPythonServer();
             bool vscOk = CreateVscodeConfig();
             bool codexOk = CreateCodexConfig();
+            bool wbOk = EnsureWorkbuddyConfig();
 
-            string msg = "";
+            var msg = new StringBuilder();
             if (pyOk)
-                msg += "✅ xy_mcp_server.py 已复制到项目根目录\n";
+            {
+                msg.AppendLine("✅ Hub 脚本已安装（配置只写一次，以后换工程无需再改）");
+                msg.AppendLine("   " + StableScript);
+            }
             else
-                msg += "⚠ xy_mcp_server.py 复制失败（可能已存在）\n";
+                msg.AppendLine("⚠ Hub 脚本安装失败，请查看 Console");
 
-            if (vscOk)
-                msg += "✅ VS Code 项目级 MCP 配置已写入\n";
-            else
-                msg += "⚠ VS Code 项目级 MCP 配置写入失败\n";
+            msg.AppendLine(vscOk ? "✅ VS Code 项目级配置已写入" : "⚠ VS Code 配置写入失败");
+            msg.AppendLine(codexOk ? "✅ Codex 用户级配置已写入" : "⚠ Codex 配置写入失败");
+            msg.AppendLine(
+                wbOk
+                    ? "✅ WorkBuddy 配置已写入（如未生效，去连接器管理页「信任」xybridge）"
+                    : "⚠ WorkBuddy 配置未写入（需 python 在 PATH 中，或设置 XYBRIDGE_PYTHON）"
+            );
 
-            if (codexOk)
-                msg += "✅ Codex 用户级 MCP 配置已写入\n";
-            else
-                msg += "⚠ Codex 用户级 MCP 配置写入失败\n";
+            msg.AppendLine();
+            msg.AppendLine("下一步:");
+            msg.AppendLine("1. 安装 Python 依赖: pip install pywin32");
+            msg.AppendLine("2. Codex / VS Code 均使用 stdio，重启客户端或新开会话后生效");
+            msg.AppendLine("3. 多开 Unity 时用 unity_list_projects 查看、unity_use_project 切换");
+            msg.AppendLine("4. Pipeline 命令已改为 HTTP 直连，无需安装 Unity CLI");
+            msg.AppendLine("   " + XY.PipelineBootstrap.PipelineInstaller.Status);
 
-            msg += "\n下一步:\n";
-            msg += "1. 安装 Python 依赖: pip install pywin32\n";
-            msg += "2. Codex / VS Code 均使用 stdio，重启客户端或新开会话后生效";
-
-            EditorUtility.DisplayDialog("XY Bridge — 安装完成", msg, "确定");
+            EditorUtility.DisplayDialog("XY Bridge — 安装完成", msg.ToString(), "确定");
         }
 
         public static void CopyPythonServerOnly()
@@ -96,6 +125,11 @@ namespace Framework.XYEditor.Bridge
             CreateVscodeConfig();
         }
 
+        public static void EnsureWorkbuddyConfigOnly()
+        {
+            EnsureWorkbuddyConfig();
+        }
+
         // ═══════════════════════════════════════════════════════════
         //  实现
         // ═══════════════════════════════════════════════════════════
@@ -105,22 +139,26 @@ namespace Framework.XYEditor.Bridge
             try
             {
                 string src = Path.Combine(McpSourceDir, "xy_mcp_server.py");
-                string dst = Path.Combine(ProjectRoot, "xy_mcp_server.py");
-
                 if (!File.Exists(src))
                 {
-                    UnityEngine.Debug.LogError("[XY Bridge] 源文件不存在: " + src);
+                    Debug.LogError("[XY Bridge] 源文件不存在: " + src);
                     return false;
                 }
 
-                File.Copy(src, dst, overwrite: true);
-                UnityEngine.Debug.Log("[XY Bridge] 已复制: " + dst);
+                // 1) 固定位置：Hub 模式的主副本，与工程无关，所有配置都指向它
+                Directory.CreateDirectory(StableDir);
+                File.Copy(src, StableScript, overwrite: true);
+                Debug.Log("[XY Bridge] 已安装 Hub 脚本: " + StableScript);
+
+                // 2) 工程根目录：保留给旧的「一工程一脚本」配置，新配置不再引用
+                File.Copy(src, Path.Combine(ProjectRoot, "xy_mcp_server.py"), overwrite: true);
+
                 AssetDatabase.Refresh();
                 return true;
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
-                UnityEngine.Debug.LogError("[XY Bridge] 复制失败: " + ex.Message);
+                Debug.LogError("[XY Bridge] 复制失败: " + ex.Message);
                 return false;
             }
         }
@@ -129,37 +167,35 @@ namespace Framework.XYEditor.Bridge
         {
             try
             {
-                string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-                if (string.IsNullOrEmpty(userProfile))
+                if (string.IsNullOrEmpty(UserProfile))
                     return false;
 
-                string codexDir = Path.Combine(userProfile, ".codex");
+                string codexDir = Path.Combine(UserProfile, ".codex");
                 Directory.CreateDirectory(codexDir);
 
                 string configPath = Path.Combine(codexDir, "config.toml");
-                string serverName = GetCodexServerName();
-                string block = BuildCodexServerBlock(serverName);
                 string config = File.Exists(configPath)
                     ? File.ReadAllText(configPath, Encoding.UTF8)
                     : "";
 
-                config = RemoveCodexServerConfig(config, serverName);
+                // 清掉此前按工程生成的 [mcp_servers.xybridge_*]，只留一条固定条目
+                config = RemoveManagedCodexServers(config);
                 if (!config.EndsWith(Environment.NewLine) && config.Length > 0)
                     config += Environment.NewLine;
-                config += Environment.NewLine + block;
+                config += Environment.NewLine + BuildCodexServerBlock(StableServerName);
 
                 File.WriteAllText(configPath, config, new UTF8Encoding(false));
-                UnityEngine.Debug.Log(
+                Debug.Log(
                     "[XY Bridge] Codex MCP 配置已更新: "
-                        + serverName
+                        + StableServerName
                         + " -> "
-                        + ProjectRoot
+                        + StableScript
                 );
                 return true;
             }
             catch (Exception ex)
             {
-                UnityEngine.Debug.LogError("[XY Bridge] Codex 配置写入失败: " + ex.Message);
+                Debug.LogError("[XY Bridge] Codex 配置写入失败: " + ex.Message);
                 return false;
             }
         }
@@ -182,37 +218,97 @@ namespace Framework.XYEditor.Bridge
 
                 File.WriteAllText(
                     configPath,
-                    BuildVscodeMcpJson(GetCodexServerName()),
+                    BuildVscodeMcpJson(StableServerName),
                     new UTF8Encoding(false)
                 );
-                UnityEngine.Debug.Log("[XY Bridge] VS Code MCP 配置已更新: " + configPath);
+                Debug.Log("[XY Bridge] VS Code MCP 配置已更新: " + configPath);
                 AssetDatabase.Refresh();
                 return true;
             }
             catch (Exception ex)
             {
-                UnityEngine.Debug.LogError("[XY Bridge] VS Code 配置写入失败: " + ex.Message);
+                Debug.LogError("[XY Bridge] VS Code 配置写入失败: " + ex.Message);
                 return false;
             }
         }
 
+        /// <summary>
+        /// 写 WorkBuddy 的 ~/.workbuddy-ai/mcp.json。
+        /// JSON 合并交给 Hub 脚本自己完成（python 有 json 模块，比在 C# 里手搓合并可靠）：
+        ///     python &lt;StableScript&gt; --install-config
+        /// 该调用是幂等的：会清掉旧的 xybridge_&lt;工程名&gt; 条目，只保留一条 xybridge。
+        /// </summary>
+        private static bool EnsureWorkbuddyConfig()
+        {
+            try
+            {
+                if (!File.Exists(StableScript))
+                {
+                    Debug.LogWarning("[XY Bridge] Hub 脚本尚未安装，跳过 WorkBuddy 配置");
+                    return false;
+                }
+
+                string python =
+                    Environment.GetEnvironmentVariable("XYBRIDGE_PYTHON")
+                    ?? "python";
+
+                var psi = new ProcessStartInfo
+                {
+                    FileName = python,
+                    Arguments = "\"" + StableScript + "\" --install-config",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true,
+                    StandardOutputEncoding = Encoding.UTF8,
+                    StandardErrorEncoding = Encoding.UTF8,
+                };
+
+                using (var p = Process.Start(psi))
+                {
+                    string stdout = p.StandardOutput.ReadToEnd();
+                    string stderr = p.StandardError.ReadToEnd();
+                    p.WaitForExit(15000);
+
+                    if (p.ExitCode == 0 && !string.IsNullOrWhiteSpace(stdout))
+                    {
+                        Debug.Log("[XY Bridge] WorkBuddy 配置:\n" + stdout.Trim());
+                        return true;
+                    }
+
+                    Debug.LogWarning(
+                        "[XY Bridge] WorkBuddy 配置写入失败（exit="
+                            + p.ExitCode
+                            + "）: "
+                            + (stderr.Trim() + stdout.Trim())
+                    );
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning(
+                    "[XY Bridge] 未能调用 python 写 WorkBuddy 配置: "
+                        + ex.Message
+                        + "\n可设置环境变量 XYBRIDGE_PYTHON 指定解释器，或手动执行：\n"
+                        + "python \""
+                        + StableScript
+                        + "\" --install-config"
+                );
+                return false;
+            }
+        }
+
+        /// <summary>固定的 MCP server 名。</summary>
         internal static string GetCodexServerName()
         {
-            string projectName = new DirectoryInfo(ProjectRoot).Name;
-            var sb = new StringBuilder("xybridge_");
-            foreach (char c in projectName.ToLowerInvariant())
-            {
-                if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
-                    sb.Append(c);
-                else
-                    sb.Append('_');
-            }
-            return Regex.Replace(sb.ToString(), "_+", "_").TrimEnd('_');
+            return StableServerName;
         }
 
         private static string BuildCodexServerBlock(string serverName)
         {
-            string root = EscapeTomlString(ProjectRoot);
+            // 脚本用绝对路径，不再依赖 cwd —— 这样它和工程解耦，一份脚本服务所有工程
+            string script = EscapeTomlString(StableScript);
             return
                 "[mcp_servers."
                 + serverName
@@ -220,11 +316,9 @@ namespace Framework.XYEditor.Bridge
                 + Environment.NewLine
                 + "command = \"python\""
                 + Environment.NewLine
-                + "args = [\"xy_mcp_server.py\", \"--transport=stdio\"]"
-                + Environment.NewLine
-                + "cwd = \""
-                + root
-                + "\""
+                + "args = [\""
+                + script
+                + "\", \"--transport=stdio\"]"
                 + Environment.NewLine
                 + "startup_timeout_sec = 30"
                 + Environment.NewLine
@@ -240,7 +334,7 @@ namespace Framework.XYEditor.Bridge
 
         private static string BuildVscodeMcpJson(string serverName)
         {
-            string root = EscapeJsonString(ProjectRoot);
+            string script = EscapeJsonString(StableScript);
             return
                 "{"
                 + Environment.NewLine
@@ -254,11 +348,9 @@ namespace Framework.XYEditor.Bridge
                 + Environment.NewLine
                 + "      \"command\": \"python\","
                 + Environment.NewLine
-                + "      \"args\": [\"xy_mcp_server.py\", \"--transport=stdio\"],"
-                + Environment.NewLine
-                + "      \"cwd\": \""
-                + root
-                + "\","
+                + "      \"args\": [\""
+                + script
+                + "\", \"--transport=stdio\"],"
                 + Environment.NewLine
                 + "      \"env\": {"
                 + Environment.NewLine
@@ -276,7 +368,11 @@ namespace Framework.XYEditor.Bridge
                 + Environment.NewLine;
         }
 
-        private static string RemoveCodexServerConfig(string config, string serverName)
+        /// <summary>
+        /// 删除本工具此前写过的所有 [mcp_servers.xybridge*] 表（含 .env 子表）。
+        /// 只匹配本工具的命名空间，不碰用户其它 mcp_servers。
+        /// </summary>
+        private static string RemoveManagedCodexServers(string config)
         {
             if (string.IsNullOrEmpty(config))
                 return "";
@@ -284,31 +380,29 @@ namespace Framework.XYEditor.Bridge
             string[] lines = config.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
             var sb = new StringBuilder();
             bool skipping = false;
-            string serverHeader = "[mcp_servers." + serverName + "]";
-            string envHeader = "[mcp_servers." + serverName + ".env]";
+            var managed = new Regex(
+                @"^\[mcp_servers\.xybridge(_[A-Za-z0-9_-]+)?(\.env)?\]$",
+                RegexOptions.Compiled
+            );
 
             foreach (string line in lines)
             {
                 string trimmed = line.Trim();
                 bool isTable = trimmed.StartsWith("[") && trimmed.EndsWith("]");
-                bool isManagedTable =
-                    string.Equals(trimmed, serverHeader, StringComparison.Ordinal)
-                    || string.Equals(trimmed, envHeader, StringComparison.Ordinal);
-
-                if (isManagedTable)
-                {
-                    skipping = true;
-                    continue;
-                }
-
                 if (isTable)
-                    skipping = false;
+                    skipping = managed.IsMatch(trimmed);
 
                 if (!skipping)
                     sb.AppendLine(line);
             }
 
-            return Regex.Replace(sb.ToString(), @"(\r?\n){3,}", Environment.NewLine + Environment.NewLine).TrimEnd();
+            return Regex
+                .Replace(
+                    sb.ToString(),
+                    @"(\r?\n){3,}",
+                    Environment.NewLine + Environment.NewLine
+                )
+                .TrimEnd();
         }
 
         private static string EscapeTomlString(string value)
@@ -320,6 +414,5 @@ namespace Framework.XYEditor.Bridge
         {
             return (value ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"");
         }
-
     }
 }

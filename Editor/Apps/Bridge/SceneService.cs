@@ -122,14 +122,14 @@ namespace Framework.XYEditor.Bridge
                 names[i] = roots[i] != null ? roots[i].name : null;
             var sb = new StringBuilder();
             sb.Append("{\"scene\":\"");
-            sb.Append(scene.name);
+            sb.Append(JsonEscape.String(scene.name));
             sb.Append("\",\"roots\":[");
             for (int i = 0; i < names.Length; i++)
             {
                 if (i > 0)
                     sb.Append(',');
                 sb.Append('"');
-                sb.Append(names[i] ?? "null");
+                sb.Append(JsonEscape.String(names[i]));
                 sb.Append('"');
             }
             sb.Append("]}");

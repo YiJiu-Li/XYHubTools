@@ -26,7 +26,7 @@ namespace Framework.XYEditor.Bridge
             var go = FindGameObject(targetName);
             if (go == null)
                 return "{\"error\":\"GameObject not found: "
-                    + targetName.Replace("\"", "\\\"")
+                    + EscapeJson(targetName)
                     + "\"}";
 
             Component[] components;
@@ -38,7 +38,7 @@ namespace Framework.XYEditor.Bridge
                     : go.GetComponent(typeName);
                 if (comp == null)
                     return "{\"error\":\"Component not found: "
-                        + typeName.Replace("\"", "\\\"")
+                        + EscapeJson(typeName)
                         + "\"}";
                 components = new[] { comp };
             }
@@ -49,7 +49,7 @@ namespace Framework.XYEditor.Bridge
 
             var result = new StringBuilder();
             result.Append("{\"gameObject\":\"");
-            result.Append(go.name);
+            result.Append(EscapeJson(go.name));
             result.Append("\",\"instanceId\":");
             result.Append(go.GetInstanceID());
             result.Append(",\"components\":[");
@@ -246,7 +246,7 @@ namespace Framework.XYEditor.Bridge
             var go = FindGameObject(targetName);
             if (go == null)
                 return "{\"error\":\"GameObject not found: "
-                    + targetName.Replace("\"", "\\\"")
+                    + EscapeJson(targetName)
                     + "\"}";
 
             // 解析 "ComponentType.field..." 前缀，缩小查找范围
@@ -260,7 +260,7 @@ namespace Framework.XYEditor.Bridge
                 wantedType = ResolveComponentType(typeName);
                 if (wantedType == null)
                     return "{\"error\":\"component type not found: "
-                        + typeName.Replace("\"", "\\\"")
+                        + EscapeJson(typeName)
                         + "\"}";
             }
 
@@ -292,10 +292,10 @@ namespace Framework.XYEditor.Bridge
                 }
                 catch (Exception ex)
                 {
-                    return "{\"error\":\"" + ex.Message.Replace("\"", "\\\"") + "\"}";
+                    return "{\"error\":\"" + EscapeJson(ex.Message) + "\"}";
                 }
             }
-            return "{\"error\":\"property not found: " + propPath.Replace("\"", "\\\"") + "\"}";
+            return "{\"error\":\"property not found: " + EscapeJson(propPath) + "\"}";
         }
 
         // ── 辅助：把 "Transform" / "UnityEngine.Transform" 解析成 Type ──
@@ -475,7 +475,7 @@ namespace Framework.XYEditor.Bridge
                     );
             }
             if (prefab == null)
-                return "{\"error\":\"prefab not found: " + assetPath.Replace("\"", "\\\"") + "\"}";
+                return "{\"error\":\"prefab not found: " + EscapeJson(assetPath) + "\"}";
 
             var sb = new StringBuilder();
             sb.Append("{\"name\":\"");
@@ -553,11 +553,6 @@ namespace Framework.XYEditor.Bridge
             return null;
         }
 
-        private static string EscapeJson(string s)
-        {
-            if (string.IsNullOrEmpty(s))
-                return "";
-            return s.Replace("\\", "\\\\").Replace("\"", "\\\"");
-        }
+        private static string EscapeJson(string s) => JsonEscape.String(s);
     }
 }

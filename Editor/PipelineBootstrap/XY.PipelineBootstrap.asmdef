@@ -1,0 +1,7 @@
+{
+    "name": "XY.PipelineBootstrap",
+    "rootNamespace": "XY.PipelineBootstrap",
+    "includePlatforms": ["Editor"],
+    "references": [],
+    "autoReferenced": true
+}

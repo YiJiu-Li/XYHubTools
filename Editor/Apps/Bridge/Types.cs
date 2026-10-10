@@ -25,7 +25,8 @@ namespace Framework.XYEditor.Bridge
         public string message = "";
         public string error = "";
         public int processId;
-        public string processPath = "";
+        /// <summary>Unity 工程根目录。多工程场景下供 MCP server 识别"这条管道属于哪个工程"。</summary>
+        public string projectPath = "";
     }
 
     /// <summary>代码执行进度快照</summary>
@@ -266,44 +267,56 @@ namespace Framework.XYEditor.Bridge
 
         private static void AppendEscapedString(StringBuilder sb, string s)
         {
-            sb.Append('"');
-            if (!string.IsNullOrEmpty(s))
+            sb.Append('"').Append(JsonEscape.String(s)).Append('"');
+        }
+    }
+
+    /// <summary>
+    /// JSON 字符串转义（含控制字符），供 Bridge 各服务手工拼装 JSON 时复用。
+    /// 返回不带外层引号的转义内容；null / 空串返回 ""。
+    /// </summary>
+    internal static class JsonEscape
+    {
+        internal static string String(string s)
+        {
+            if (string.IsNullOrEmpty(s))
+                return "";
+
+            var sb = new StringBuilder(s.Length + 8);
+            foreach (char c in s)
             {
-                foreach (char c in s)
+                switch (c)
                 {
-                    switch (c)
-                    {
-                        case '"':
-                            sb.Append("\\\"");
-                            break;
-                        case '\\':
-                            sb.Append("\\\\");
-                            break;
-                        case '\b':
-                            sb.Append("\\b");
-                            break;
-                        case '\f':
-                            sb.Append("\\f");
-                            break;
-                        case '\n':
-                            sb.Append("\\n");
-                            break;
-                        case '\r':
-                            sb.Append("\\r");
-                            break;
-                        case '\t':
-                            sb.Append("\\t");
-                            break;
-                        default:
-                            if (c < 32)
-                                sb.Append("\\u").Append(((int)c).ToString("x4"));
-                            else
-                                sb.Append(c);
-                            break;
-                    }
+                    case '"':
+                        sb.Append("\\\"");
+                        break;
+                    case '\\':
+                        sb.Append("\\\\");
+                        break;
+                    case '\b':
+                        sb.Append("\\b");
+                        break;
+                    case '\f':
+                        sb.Append("\\f");
+                        break;
+                    case '\n':
+                        sb.Append("\\n");
+                        break;
+                    case '\r':
+                        sb.Append("\\r");
+                        break;
+                    case '\t':
+                        sb.Append("\\t");
+                        break;
+                    default:
+                        if (c < 32)
+                            sb.Append("\\u").Append(((int)c).ToString("x4"));
+                        else
+                            sb.Append(c);
+                        break;
                 }
             }
-            sb.Append('"');
+            return sb.ToString();
         }
     }
 }

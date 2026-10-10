@@ -1,0 +1,7 @@
+{
+  "name": "com.unity.pipeline",
+  "version": "0.8.0-xy.1",
+  "upstreamVersion": "0.8.0-exp.1",
+  "unity": "2022.3",
+  "sha256": "f858535dbb8c1e8b56c6fea800b87334154eec6f02d68c91b520d9b718e899c4"
+}

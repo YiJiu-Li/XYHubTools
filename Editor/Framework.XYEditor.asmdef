@@ -1,7 +1,7 @@
 {
     "name": "Framework.XYEditor",
     "rootNamespace": "Framework.XYEditor",
-    "references": [],
+    "references": ["XY.PipelineBootstrap"],
     "includePlatforms": [
         "Editor"
     ],

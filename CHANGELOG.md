@@ -5,6 +5,102 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.6.0] - 2026-10-10
+
+### 新增
+- XY 随附 `0.8.0-xy.1` Pipeline UPM 安装包，缺少 Pipeline 的项目首次加载自动安装；保留已有安装。
+- `unity_pipeline` 支持结构化参数，`unity_pipeline_commands` 查询实时命令 schema。
+- Bridge 面板显示 Pipeline 安装状态并提供检查/重试入口。
+
+### 调整
+- `unity_cli` 保留命令字符串入口，改为直接调用 Pipeline HTTP，移除对 Unity CLI 可执行文件的依赖。
+- 每次请求重新读取目标工程服务信息；超时不重放命令；Pipeline 失败透传 MCP `isError`。
+- 随附 Pipeline 兼容基线为 Unity 2022.3，保留原始许可证及第三方声明。
+
+### 修复
+- 自检面板增加 Pipeline 分组及 4 项真实 HTTP 检查，异步执行避免阻塞主线程。
+- 已有历史结果时仍显示新增的未运行用例。
+- 修正包根目录 Git 安装地址，最低 Unity 版本统一为已验证的 2022.3。
+- Bridge 支持并发管道连接、编译引用缓存及主线程预处理符号快照；修复 JSON 字符串转义。
+
+## [1.5.0] - 2026-09-29
+
+### 新增
+- 🔗 **MCP Bridge 改为 Hub 模式 —— MCP 配置只写一次**
+  - 原先管道名由 `xy_mcp_server.py` 所在目录推导，于是「一个工程 = 一份脚本 = 一条 MCP 配置」，
+    每把一个插件导入新工程都要再写一条 `mcpServers`
+  - 现在 server 枚举 `\\.\pipe\xybridge_unity_*` **自动发现所有存活的 Unity 实例**。
+    目标解析优先级：`--project=<关键字>` / `XYBRIDGE_PROJECT` 环境变量
+    → 脚本同目录推导（向后兼容旧的「一工程一脚本」用法）→ 唯一存活实例
+    → 报错并列出候选（**多个实例时不会乱猜**）
+  - 脚本安装到与工程无关的固定位置 `%USERPROFILE%\.xybridge\xy_mcp_server.py`
+  - 安装时同时写入 Codex / VS Code / WorkBuddy 三处，均为**单条 `xybridge`**；
+    旧版本按工程生成的 `xybridge_<工程名>` 条目会自动清理，配置不再随工程数量增长
+- 🧩 新增 `unity_list_projects`：列出所有存活的 Unity（工程路径、PID、当前绑定）
+- 🧩 新增 `unity_use_project`：多开 Unity 时切换目标，参数写工程名或路径片段即可
+  - MCP 工具数 23 → 25
+
+### 修复
+- 🐛 **修复 `unity_ping` 恒返回 `PID: 0`**
+  - Python 侧读的是 ping 响应里的 `processId`，而 `YZJBridge.Ok()` 未填该字段
+    （真实 PID 只挂在 `unity_connected` 推送里，Python 收到后会丢弃）
+- 🐛 `PipeEnvelope.processPath` 是「声明了但从未赋值」的死字段，改为语义正确的 `projectPath`，
+  并在 `ping` / `status` 响应里填入 Unity 工程根目录 —— 多工程识别依赖它
+
+### 变更
+- 🔧 `BridgeSetup` 重写：server 名不再按工程生成（`xybridge_<工程名>` → 固定 `xybridge`）；
+  Codex 配置改用脚本绝对路径并去掉 `cwd`，与工程彻底解耦
+- 🔧 Bridge 状态面板新增「Hub 脚本」行，显示固定安装路径及是否已安装
+- 🔧 WorkBuddy 的 `mcp.json` 合并交由 `python <script> --install-config` 完成
+  （python 自带 `json` 模块，比在 C# 里手搓 JSON 合并可靠），且幂等
+
+### 文档
+- 📝 README 重写 MCP Bridge 配置章节，说明 Hub 模式与多工程切换
+
+---
+
+## [1.4.0] - 2026-09-29
+
+### 新增
+- 🧩 **MCP 工具补齐「组件写入」与「Prefab 读取」**
+  - 新增 `unity_set_property`：修改 GameObject 组件属性，走 Undo，可 Ctrl+Z 撤销；
+    属性路径支持友好名与序列化名（`Transform.localPosition` / `m_LocalScale.x`），
+    支持 bool / int / float / string / enum / Vector2 / Vector3 / Color / ObjectReference
+  - 新增 `unity_get_prefab_structure`：读取 Prefab 的子物体层级与每个物体的组件列表
+  - 这两项后端（`ComponentService`）早已实现，但一直未接入路由；本次接线到
+    `MessageDispatcher` 的 `set_property` / `get_prefab_structure`，MCP 工具数 21 → 23
+
+### 优化
+- ⚡ **MCP Bridge Python 侧复用长连接**，不再每次工具调用后断开重连
+  （原先每次调用都要重新 `WaitNamedPipe` + 暖场 ping，最多多等 5 秒）
+- 🔧 读管道超时时主动关闭句柄，避免残留读线程与后续读争抢同一条管道
+- 🎨 **MCP Bridge 状态面板按框架规范重写 UI**
+  - 改用 `GUILayout.BeginArea(rect)` + `EditorGUILayout.*` 自动布局，不再手算 Rect 高度、
+    不再维护 `_contentHeight` 滚动高度；窗口缩放 / 面板变窄时自适应
+  - 新增 `BridgeStyles` 样式缓存（对齐 `XY_HubStyles` 模式）：集中管理、延迟初始化、
+    皮肤切换自动重建，消除 OnGUI 热路径里每帧 `new GUIStyle` / `new Texture2D`
+  - 颜色改为皮肤感知（light / dark 双套），修复浅色皮肤下深色硬编码文字不可读的问题
+  - 状态卡片、胶囊筛选、结果行、日志区统一为框架风格；分组标签按 core/assets/scene/events 着色
+
+### 修复
+- 🐛 **统一 Bridge 各服务的 JSON 字符串转义**，新增共享 `JsonEscape`
+  - 修复 GameObject / 场景根节点名字含引号、反斜杠或换行时产出非法 JSON 的问题
+  - `ComponentService`、`SceneService`、`MessageDispatcher` 的手工拼装统一走同一实现
+- 🐛 **修复 Bridge 自检跑完后看不到结果**
+  - 自检结果改为写入 `SessionState`，域重载（脚本重编译）后面板实例重建也能恢复显示
+  - 每个用例跑完立即落盘，中途被打断也能保住已完成的部分；有历史结果时自动展开面板
+  - 会触发重编译 / 资源刷新的用例标记为「破坏性」，默认「运行全部」跳过，
+    需勾选「含破坏性用例」才执行
+  - `unity_recompile_scripts` 自检不再真的调用 `RequestScriptCompilation`
+    （那会把自检自己打断），改为验证编译服务与引用收集可用
+  - `unity_set_property` 自检改用临时 GameObject 并测完销毁，不再改动用户场景里的对象
+
+### 文档
+- 📝 `MessageDispatcher` 头部注释由「11 种消息类型」更正为实际数量（25）
+- 📝 Bridge 自检由 21 个 case 扩充到 23 个，状态面板文案同步
+
+---
+
 ## [1.3.0] - 2026-06-29
 
 ### 新增

@@ -3,6 +3,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 using System;
+using System.Collections.Concurrent;
 using System.IO;
 using System.IO.Pipes;
 using System.Text;
@@ -31,14 +32,25 @@ namespace Framework.XYEditor.Bridge
         private static Task _serverTask;
         internal static readonly object ConnectionLock = new object();
         internal static readonly SemaphoreSlim WriteLock = new SemaphoreSlim(1, 1);
-        private static NamedPipeServerStream _currentServer;
-        private static StreamWriter _currentWriter;
-        private static volatile bool _pipeConnected;
+
+        /// <summary>
+        /// 当前已接受的连接：server -> writer。
+        /// accept 循环不再等待连接处理结束（见 ServerLoop），所以同一时刻可能有多条连接
+        /// （MCP 客户端的常驻连接 + unity_list_projects 的临时探测连接），响应必须写回
+        /// 请求来源的那一条，不能共用一个 _currentWriter。
+        /// </summary>
+        private static readonly ConcurrentDictionary<NamedPipeServerStream, StreamWriter> _connections =
+            new ConcurrentDictionary<NamedPipeServerStream, StreamWriter>();
         internal static readonly int EditorProcessId = ResolveCurrentProcessId();
+
+        /// <summary>Unity 工程根目录（Assets 的上一级）。管道名与多工程识别都基于它。</summary>
+        internal static readonly string ProjectRoot = System.IO.Directory
+            .GetParent(UnityEngine.Application.dataPath)
+            .FullName;
 
         // ───────────────── 公开状态 ─────────────────
         internal static bool IsRunning => _serverTask != null && !_serverTask.IsCompleted;
-        internal static bool IsConnected => _pipeConnected;
+        internal static bool IsConnected => !_connections.IsEmpty;
 
         // ───────────────── 管道名 ─────────────────
         internal static string PipeName
@@ -53,10 +65,7 @@ namespace Framework.XYEditor.Bridge
 
         private static string GeneratePipeName()
         {
-            string projectPath = System
-                .IO.Directory.GetParent(UnityEngine.Application.dataPath)
-                .FullName;
-            string sanitized = projectPath
+            string sanitized = ProjectRoot
                 .Replace('\\', '_')
                 .Replace('/', '_')
                 .Replace(':', '_')
@@ -115,21 +124,22 @@ namespace Framework.XYEditor.Bridge
             {
                 lock (ConnectionLock)
                 {
-                    try
+                    foreach (var kv in _connections)
                     {
-                        if (_currentWriter != null)
-                            _currentWriter.Dispose();
+                        try
+                        {
+                            if (kv.Value != null)
+                                kv.Value.Dispose();
+                        }
+                        catch { }
+                        try
+                        {
+                            if (kv.Key != null)
+                                kv.Key.Dispose();
+                        }
+                        catch { }
                     }
-                    catch { }
-                    try
-                    {
-                        if (_currentServer != null)
-                            _currentServer.Dispose();
-                    }
-                    catch { }
-                    _currentWriter = null;
-                    _currentServer = null;
-                    _pipeConnected = false;
+                    _connections.Clear();
                 }
             }
             catch { }
@@ -178,7 +188,11 @@ namespace Framework.XYEditor.Bridge
                     await server.WaitForConnectionAsync(ct);
 #endif
                     Debug.Log("[XY Bridge] Pipe client connected: " + PipeName);
-                    await HandleConnectionAsync(server, ct);
+                    // 分离处理：accept 循环立刻回到 WaitForConnectionAsync，可以继续接受新连接。
+                    // 若在这里 await（旧写法），一个连接占用期间任何新连接都连不上服务端 ——
+                    // unity_list_projects 的临时探测连接会直接超时，报「探测失败」。
+                    // 命令执行本身仍由 CodeExecutionService.ExecuteCodeLock 串行化，语义不变。
+                    _ = HandleConnectionDetachedAsync(server, ct);
                 }
                 catch (OperationCanceledException)
                 {
@@ -254,6 +268,32 @@ namespace Framework.XYEditor.Bridge
         }
 #endif
 
+        /// <summary>
+        /// 不阻塞 accept 循环的连接处理入口。异常必须在这里吞掉：
+        /// 抛回 ServerLoop 会打断整个 accept 循环，一条坏连接就能让服务不再接受新连接。
+        /// </summary>
+        private static async Task HandleConnectionDetachedAsync(
+            NamedPipeServerStream server,
+            CancellationToken ct
+        )
+        {
+            try
+            {
+                await HandleConnectionAsync(server, ct);
+            }
+            catch (OperationCanceledException) { }
+            catch (ObjectDisposedException) { }
+            catch (Exception ex)
+            {
+                Debug.LogError("[XY Bridge] Connection handler failed: " + ex);
+                try
+                {
+                    server.Dispose();
+                }
+                catch { }
+            }
+        }
+
         private static async Task HandleConnectionAsync(
             NamedPipeServerStream server,
             CancellationToken ct
@@ -283,11 +323,7 @@ namespace Framework.XYEditor.Bridge
                     }
                 )
                 {
-                    lock (ConnectionLock)
-                    {
-                        _currentServer = server;
-                        _currentWriter = writer;
-                    }
+                    _connections[server] = writer;
 
                     await SendEnvelopeAsync(
                         new PipeEnvelope
@@ -295,14 +331,9 @@ namespace Framework.XYEditor.Bridge
                             type = "unity_connected",
                             message = "connected",
                             processId = EditorProcessId,
-                        }
+                        },
+                        writer
                     );
-
-                    lock (ConnectionLock)
-                    {
-                        if (ReferenceEquals(_currentServer, server))
-                            _pipeConnected = true;
-                    }
 
                     while (!ct.IsCancellationRequested)
                     {
@@ -312,15 +343,13 @@ namespace Framework.XYEditor.Bridge
                         if (string.IsNullOrWhiteSpace(line))
                             continue;
                         string captured = line;
-                        _ = ProcessIncomingLineAsync(captured);
+                        _ = ProcessIncomingLineAsync(captured, writer);
                     }
 
-                    lock (ConnectionLock)
-                    {
-                        _currentWriter = null;
-                        _currentServer = null;
-                        _pipeConnected = false;
-                    }
+                    StreamWriter dropped;
+                    _connections.TryRemove(server, out dropped);
+                    // 等待可能仍在进行的写入完成，避免随后 Dispose(writer/server)
+                    // 与并发写冲突；获取后立即释放，等价于同步等待写锁空闲
                     await WriteLock.WaitAsync();
                     WriteLock.Release();
                 }
@@ -333,21 +362,17 @@ namespace Framework.XYEditor.Bridge
             }
             finally
             {
-                lock (ConnectionLock)
-                {
-                    if (ReferenceEquals(_currentServer, server))
-                    {
-                        _currentWriter = null;
-                        _currentServer = null;
-                        _pipeConnected = false;
-                    }
-                }
-                CodeExecutionService.CancelActive("pipe disconnected");
+                StreamWriter dropped;
+                _connections.TryRemove(server, out dropped);
+                // 只有所有连接都断开时才取消进行中的 execute_code：多连接下，
+                // 一条临时探测连接断开不该打断另一条连接正在跑的代码。
+                if (_connections.IsEmpty)
+                    CodeExecutionService.CancelActive("pipe disconnected");
                 Debug.Log("[XY Bridge] Pipe client disconnected: " + PipeName);
             }
         }
 
-        private static async Task ProcessIncomingLineAsync(string json)
+        private static async Task ProcessIncomingLineAsync(string json, StreamWriter writer)
         {
             PipeEnvelope request = null;
             try
@@ -380,16 +405,11 @@ namespace Framework.XYEditor.Bridge
 
             PipeEnvelope response = await MessageDispatcher.HandleAsync(request);
             if (response != null && !string.IsNullOrEmpty(response.reply_to))
-                await SendEnvelopeAsync(response);
+                await SendEnvelopeAsync(response, writer);
         }
 
-        internal static async Task<bool> SendEnvelopeAsync(PipeEnvelope env)
+        internal static async Task<bool> SendEnvelopeAsync(PipeEnvelope env, StreamWriter writer)
         {
-            StreamWriter writer;
-            lock (ConnectionLock)
-            {
-                writer = _currentWriter;
-            }
             if (writer == null)
                 return false;
 

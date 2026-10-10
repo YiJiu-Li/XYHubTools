@@ -18,12 +18,10 @@ namespace Framework.XYEditor.Bridge
     internal static class SnippetCompiler
     {
         // ───────────────── 编译选项 ─────────────────
-        internal static readonly CSharpParseOptions ParseOptions = new CSharpParseOptions(
-            kind: SourceCodeKind.Regular,
-            documentationMode: DocumentationMode.None,
-            languageVersion: LanguageVersion.CSharp9,
-            preprocessorSymbols: CompilationService.BuildPreprocessorSymbols()
-        );
+        // ParseOptions 刻意不做静态字段：预处理器符号每次编译现取，
+        // 否则改了 Scripting Define Symbols / 切了构建目标都不会刷新，
+        // 而且静态初始化可能落在非主线程上（Editor API 只能在主线程读）。
+        internal static CSharpParseOptions ParseOptions => CompilationService.ProjectParseOptions();
 
         internal static readonly CSharpCompilationOptions CompilationOptions =
             new CSharpCompilationOptions(

@@ -27,6 +27,7 @@ namespace Framework.XYEditor.Bridge
 
         /// <summary>自动启动是否已尝试过（每次域重载重置；用户手动停止后不会被拉起）。</summary>
         private static bool _autoStartAttempted;
+        private static bool _quitting;
 
         // ───────────────── 主线程队列 ─────────────────
         private static readonly object _mainThreadQueueLock = new object();
@@ -50,9 +51,21 @@ namespace Framework.XYEditor.Bridge
             EditorApplication.update += PumpMainThreadQueue;
             EditorApplication.delayCall += Start;
             AssemblyReloadEvents.beforeAssemblyReload += Stop;
+            EditorApplication.quitting += OnQuitting;
         }
 
-        public static void Start() => PipeServer.Start();
+        public static void Start()
+        {
+            if (!_quitting) PipeServer.Start();
+        }
+
+        private static void OnQuitting()
+        {
+            _quitting = true;
+            EditorApplication.update -= PumpMainThreadQueue;
+            EditorApplication.delayCall -= Start;
+            Stop();
+        }
 
         public static void Stop()
         {

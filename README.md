@@ -115,10 +115,14 @@ XY 自有代码使用 MIT；随附 Pipeline 及第三方组件遵循各自许可
    pip install pywin32
    ```
 
+#### Pipeline 命令浏览器
+
+MCP Bridge 面板内可浏览当前服务的全部 Pipeline 命令，支持名称、功能说明和标签搜索、分类筛选。点击命令查看官方功能说明、参数类型和必填项，支持复制命令名称及完整参数 Schema。列表只用于查看，不会执行命令；服务更新后可点击“刷新命令”重新读取。
+
 #### Pipeline：只引入 XY，无需 Unity CLI
 
-XY 随附当前维护的 Pipeline 安装包。首次加载时，缺少 `com.unity.pipeline` 的项目
-会通过 Unity Package Manager 自动安装；已有 Pipeline 保留，不覆盖。依赖由 UPM
+首次加载时，缺少 `com.unity.pipeline` 的 Unity 6 项目通过 UPM 安装固定版本官方包，
+Unity 2022.3 项目安装 XY 随附兼容包；已有 Pipeline 保留，不覆盖。依赖由 UPM
 解析，首次安装可能需要网络。面板显示安装状态，可点 **检查 / 重试**；也可用
 `Tools > XY Hub > 检查或安装 Pipeline`。
 
@@ -128,15 +132,16 @@ MCP 直接访问目标项目的 Pipeline HTTP 服务，不再寻找或启动 `un
 |---|---|
 | `unity_cli` | 保留旧入口，例如 `{"spec":"editor_status"}`；空 spec 返回精简命令列表 |
 | `unity_pipeline` | 结构化调用，例如 `{"command":"editor_status","parameters":{}}` |
-| `unity_pipeline_commands` | 查看命令参数，例如 `{"command":"eval"}` |
+| `unity_pipeline_commands` | 默认分类索引；用 query/tag 筛选、nextOffset 翻页；`{"command":"eval"}` 返回完整参数 |
+| `unity_pipeline_job` | `unity_pipeline` 加 `job:true` 提交后，传返回的完整 `xyJob` 查询或取消后台任务 |
 
 命令参数由 Pipeline 自己解析，端口和认证令牌从当前目标项目读取。切换工程后不复用
 旧项目的连接信息。构建、测试等异步命令仍需查询对应 `*_status`；连接超时不会自动
 重复执行命令，以免重复修改资源。Pipeline 失败结果会返回 MCP `isError: true`。
 旧 `unity_cli` 名称仅作为兼容入口，不支持 CLI 自身的全局选项或 Player 目标选择。
 
-当前随附版本为 `0.8.0-xy.1`，兼容基线为 Unity 2022.3；其他 Unity 版本的适配尚未
-在这里承诺。Python + pywin32 仍是 Bridge 的运行前提。更新包后需更新 MCP 脚本并
+当前兼容包为 `0.8.0-xy.2`，由校验过的官方原包加独立补丁重建，已验证 Unity 2022.3.53f1。
+Unity 6 官方路线需在对应编辑器中单独验收。Python + pywin32 仍是 Bridge 的运行前提。更新包后需更新 MCP 脚本并
 重启 MCP 服务，才能使用新入口。
 
 团队项目请一并提交自动生成的 `Packages/XYBridge~/`、`Packages/manifest.json`

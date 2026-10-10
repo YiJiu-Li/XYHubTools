@@ -107,6 +107,8 @@ namespace Framework.XYEditor.Bridge
         //  主绘制
         // ═══════════════════════════════════════════════════════════════
 
+        private readonly PipelineCommandBrowser _commandBrowser = new PipelineCommandBrowser();
+
         public void OnGUI(Rect rect)
         {
             BridgeStyles.EnsureInited();
@@ -118,6 +120,8 @@ namespace Framework.XYEditor.Bridge
             DrawStatusCard();
             GUILayout.Space(10);
             DrawControls();
+            DrawDivider();
+            _commandBrowser.Draw();
             DrawDivider();
             DrawTestPanel();
             DrawDivider();

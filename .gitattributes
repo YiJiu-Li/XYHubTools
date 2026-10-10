@@ -1,0 +1,3 @@
+# Patch hashes and patch application must be stable across Windows/Linux checkouts.
+Pipeline~/patches/*.patch text eol=lf
+Pipeline~/pipeline.tgz binary

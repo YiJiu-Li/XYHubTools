@@ -1,0 +1,14 @@
+{
+  "upstreamVersion": "0.8.0-exp.1",
+  "version": "0.8.0-xy.2",
+  "unity": "2022.3",
+  "compatibilityRevision": "unity-2022.3-1",
+  "validatedUnityVersions": [
+    "2022.3.53f1"
+  ],
+  "upstreamArchiveSha256": "29fbb6689963fd37b19b7bcafae55ca4d36f87af251c63be39428c668437e74a",
+  "upstreamUrl": "https://download.packages.unity.com/com.unity.pipeline/-/com.unity.pipeline-0.8.0-exp.1.tgz",
+  "patches": [
+    "patches/unity-2022.3.patch"
+  ]
+}

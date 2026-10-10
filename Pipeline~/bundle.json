@@ -1,7 +1,18 @@
 {
   "name": "com.unity.pipeline",
-  "version": "0.8.0-xy.1",
+  "version": "0.8.0-xy.2",
   "upstreamVersion": "0.8.0-exp.1",
   "unity": "2022.3",
-  "sha256": "f858535dbb8c1e8b56c6fea800b87334154eec6f02d68c91b520d9b718e899c4"
+  "upstreamUnity": "6000.0",
+  "upstreamRevision": "dde7080264d32a1091171d4b358351279fa10ddb",
+  "compatibilityRevision": "unity-2022.3-1",
+  "validatedUnityVersions": [
+    "2022.3.53f1"
+  ],
+  "sourceTreeSha256": "38d78771f3aefde79b119d01bb29f75a96dc573076cffdc5332ca77d0046fd8e",
+  "upstreamArchiveSha256": "29fbb6689963fd37b19b7bcafae55ca4d36f87af251c63be39428c668437e74a",
+  "patches": {
+    "patches/unity-2022.3.patch": "f33bef0223ea71c29dc69ff06457e0e3e35498af3796838e57e8514dea3a72cc"
+  },
+  "sha256": "025b2b2c62d3bd364b107eee195d375fbb4ae51bb23f134ec934332067dfc23f"
 }

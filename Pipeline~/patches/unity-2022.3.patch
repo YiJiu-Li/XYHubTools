@@ -1,0 +1,466 @@
+--- a/Editor/Commands/Assets/AssetCommands.cs
++++ b/Editor/Commands/Assets/AssetCommands.cs
+@@ -8,6 +8,11 @@
+ using UnityEditor;
+ using UnityEngine;
+ using Object = UnityEngine.Object;
++// Unity 6 renamed PhysicMaterial -> PhysicsMaterial. On 2022.3 only the old name exists,
++// so alias it back for the code below (which was written against the Unity 6 name).
++#if !UNITY_6000_0_OR_NEWER
++using PhysicsMaterial = UnityEngine.PhysicMaterial;
++#endif
+ 
+ namespace Unity.Pipeline.Editor.Commands.Assets
+ {
+--- a/Editor/Commands/Materials/MaterialCommands.cs
++++ b/Editor/Commands/Materials/MaterialCommands.cs
+@@ -46,7 +46,13 @@
+                 // rawRenderQueue is -1 when the material inherits from the shader and a positive
+                 // integer when explicitly overridden — returning the raw value preserves the
+                 // round-trip contract with set_material_properties renderQueue:-1 (inherit).
++                // Unity 2022.3 has no Material.rawRenderQueue, so fall back to renderQueue there
++                // (which loses the "inherited" -1 distinction).
++#if UNITY_6000_0_OR_NEWER
+                 RenderQueue = mat.rawRenderQueue,
++#else
++                RenderQueue = mat.renderQueue,
++#endif
+                 EnabledKeywords = GetEnabledKeywords(mat),
+             };
+ 
+--- a/Editor/PipelineAnalytics.cs
++++ b/Editor/PipelineAnalytics.cs
+@@ -27,6 +27,9 @@
+     /// survives domain reloads and dies with the editor, so a recompile does not start a new
+     /// session.
+     /// </summary>
++// Unity 6 only: UnityEngine.Analytics.IAnalytic / AnalyticInfo / AnalyticInfoAttribute
++// do not exist in Unity 2022.3 — degrade to a no-op shim there.
++#if UNITY_6000_0_OR_NEWER
+ #if UNITY_6000_5_OR_NEWER
+     [NoAutoStaticsCleanup]
+ #endif
+@@ -365,4 +368,15 @@
+             }
+         }
+     }
++#else
++    /// <summary>
++    /// Unity 2022.3 shim: the Unity 6 <c>UnityEngine.Analytics.IAnalytic</c> API is unavailable,
++    /// so pipeline telemetry degrades to a no-op. Keeps the two call sites compiling.
++    /// </summary>
++    internal static class PipelineAnalytics
++    {
++        internal static void RecordCommandExecuted(in CommandExecutionInfo info) { }
++        internal static void SendSessionStoppedIfStarted() { }
++    }
++#endif
+ }
+--- a/Runtime/Plugins/CodeAnalysis/UnityPipeline.Microsoft.CodeAnalysis.CSharp.dll.meta
++++ b/Runtime/Plugins/CodeAnalysis/UnityPipeline.Microsoft.CodeAnalysis.CSharp.dll.meta
+@@ -2,7 +2,7 @@
+ guid: b5a1f47d969a4054bbbf0bc7cc231ee5
+ PluginImporter:
+   externalObjects: {}
+-  serializedVersion: 3
++  serializedVersion: 2
+   iconMap: {}
+   executionOrder: {}
+   defineConstraints:
+@@ -12,32 +12,46 @@
+   isExplicitlyReferenced: 0
+   validateReferences: 1
+   platformData:
+-    Any:
++  - first:
++      Any: 
++    second:
+       enabled: 0
+       settings: {}
+-    Editor:
++  - first:
++      Editor: Editor
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+         DefaultValueInitialized: true
+         OS: AnyOS
+-    Linux64:
++  - first:
++      Standalone: Linux64
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    OSXUniversal:
++  - first:
++      Standalone: OSXUniversal
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    Win:
++  - first:
++      Standalone: Win
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    Win64:
++  - first:
++      Standalone: Win64
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    WindowsStoreApps:
++  - first:
++      Windows Store Apps: WindowsStoreApps
++    second:
+       enabled: 0
+       settings:
+         CPU: AnyCPU
+--- a/Runtime/Plugins/CodeAnalysis/UnityPipeline.Microsoft.CodeAnalysis.dll.meta
++++ b/Runtime/Plugins/CodeAnalysis/UnityPipeline.Microsoft.CodeAnalysis.dll.meta
+@@ -2,7 +2,7 @@
+ guid: ff3508870465d8e4b83e5a2c71492756
+ PluginImporter:
+   externalObjects: {}
+-  serializedVersion: 3
++  serializedVersion: 2
+   iconMap: {}
+   executionOrder: {}
+   defineConstraints:
+@@ -12,32 +12,46 @@
+   isExplicitlyReferenced: 0
+   validateReferences: 1
+   platformData:
+-    Any:
++  - first:
++      Any: 
++    second:
+       enabled: 0
+       settings: {}
+-    Editor:
++  - first:
++      Editor: Editor
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+         DefaultValueInitialized: true
+         OS: AnyOS
+-    Linux64:
++  - first:
++      Standalone: Linux64
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    OSXUniversal:
++  - first:
++      Standalone: OSXUniversal
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    Win:
++  - first:
++      Standalone: Win
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    Win64:
++  - first:
++      Standalone: Win64
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    WindowsStoreApps:
++  - first:
++      Windows Store Apps: WindowsStoreApps
++    second:
+       enabled: 0
+       settings:
+         CPU: AnyCPU
+--- a/Runtime/Plugins/CodeAnalysis/UnityPipeline.System.Collections.Immutable.dll.meta
++++ b/Runtime/Plugins/CodeAnalysis/UnityPipeline.System.Collections.Immutable.dll.meta
+@@ -2,7 +2,7 @@
+ guid: 1c674545fbd78e64281587eb24ab64c3
+ PluginImporter:
+   externalObjects: {}
+-  serializedVersion: 3
++  serializedVersion: 2
+   iconMap: {}
+   executionOrder: {}
+   defineConstraints:
+@@ -12,7 +12,9 @@
+   isExplicitlyReferenced: 0
+   validateReferences: 1
+   platformData:
+-    Any:
++  - first:
++      Any: 
++    second:
+       enabled: 1
+       settings:
+         Exclude Editor: 0
+@@ -20,29 +22,41 @@
+         Exclude OSXUniversal: 0
+         Exclude Win: 0
+         Exclude Win64: 0
+-    Editor:
++  - first:
++      Editor: Editor
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+         DefaultValueInitialized: true
+         OS: AnyOS
+-    Linux64:
++  - first:
++      Standalone: Linux64
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    OSXUniversal:
++  - first:
++      Standalone: OSXUniversal
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    Win:
++  - first:
++      Standalone: Win
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    Win64:
++  - first:
++      Standalone: Win64
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    WindowsStoreApps:
++  - first:
++      Windows Store Apps: WindowsStoreApps
++    second:
+       enabled: 0
+       settings:
+         CPU: AnyCPU
+--- a/Runtime/Plugins/CodeAnalysis/UnityPipeline.System.Reflection.Metadata.dll.meta
++++ b/Runtime/Plugins/CodeAnalysis/UnityPipeline.System.Reflection.Metadata.dll.meta
+@@ -2,7 +2,7 @@
+ guid: bfb1ff29d529b904b8f210e2a1b4b8ce
+ PluginImporter:
+   externalObjects: {}
+-  serializedVersion: 3
++  serializedVersion: 2
+   iconMap: {}
+   executionOrder: {}
+   defineConstraints:
+@@ -12,7 +12,9 @@
+   isExplicitlyReferenced: 0
+   validateReferences: 1
+   platformData:
+-    Any:
++  - first:
++      Any: 
++    second:
+       enabled: 1
+       settings:
+         Exclude Editor: 0
+@@ -20,29 +22,41 @@
+         Exclude OSXUniversal: 0
+         Exclude Win: 0
+         Exclude Win64: 0
+-    Editor:
++  - first:
++      Editor: Editor
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+         DefaultValueInitialized: true
+         OS: AnyOS
+-    Linux64:
++  - first:
++      Standalone: Linux64
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    OSXUniversal:
++  - first:
++      Standalone: OSXUniversal
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    Win:
++  - first:
++      Standalone: Win
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    Win64:
++  - first:
++      Standalone: Win64
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    WindowsStoreApps:
++  - first:
++      Windows Store Apps: WindowsStoreApps
++    second:
+       enabled: 0
+       settings:
+         CPU: AnyCPU
+--- a/Runtime/Plugins/CodeAnalysis/UnityPipeline.System.Runtime.CompilerServices.Unsafe.dll.meta
++++ b/Runtime/Plugins/CodeAnalysis/UnityPipeline.System.Runtime.CompilerServices.Unsafe.dll.meta
+@@ -2,7 +2,7 @@
+ guid: cab0ad3a2a404673a7c7a6b3939109b6
+ PluginImporter:
+   externalObjects: {}
+-  serializedVersion: 3
++  serializedVersion: 2
+   iconMap: {}
+   executionOrder: {}
+   defineConstraints:
+@@ -12,7 +12,9 @@
+   isExplicitlyReferenced: 0
+   validateReferences: 1
+   platformData:
+-    Any:
++  - first:
++      Any: 
++    second:
+       enabled: 1
+       settings:
+         Exclude Editor: 0
+@@ -20,29 +22,41 @@
+         Exclude OSXUniversal: 0
+         Exclude Win: 0
+         Exclude Win64: 0
+-    Editor:
++  - first:
++      Editor: Editor
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+         DefaultValueInitialized: true
+         OS: AnyOS
+-    Linux64:
++  - first:
++      Standalone: Linux64
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    OSXUniversal:
++  - first:
++      Standalone: OSXUniversal
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    Win:
++  - first:
++      Standalone: Win
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    Win64:
++  - first:
++      Standalone: Win64
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    WindowsStoreApps:
++  - first:
++      Windows Store Apps: WindowsStoreApps
++    second:
+       enabled: 0
+       settings:
+         CPU: AnyCPU
+--- /dev/null
++++ b/Editor/Console/ConsoleWindowUtility2022.cs
+@@ -0,0 +1,51 @@
++// Unity 2022.3 shim: UnityEditor.ConsoleWindowUtility only became public in Unity 6.
++// This provides the two members EditorConsoleGroundTruth uses, backed by the public
++// Application.logMessageReceived callback so the console counts still work.
++#if !UNITY_6000_0_OR_NEWER
++using System;
++using UnityEngine;
++
++namespace UnityEditor
++{
++    internal static class ConsoleWindowUtility
++    {
++        static int s_Errors;
++        static int s_Warnings;
++        static int s_Logs;
++
++        public static event Action consoleLogsChanged;
++
++        static ConsoleWindowUtility()
++        {
++            Application.logMessageReceived += OnLogMessageReceived;
++        }
++
++        static void OnLogMessageReceived(string message, string stackTrace, LogType type)
++        {
++            switch (type)
++            {
++                case LogType.Error:
++                case LogType.Assert:
++                case LogType.Exception:
++                    s_Errors++;
++                    break;
++                case LogType.Warning:
++                    s_Warnings++;
++                    break;
++                default:
++                    s_Logs++;
++                    break;
++            }
++
++            consoleLogsChanged?.Invoke();
++        }
++
++        public static void GetConsoleLogCounts(out int errorCount, out int warningCount, out int logCount)
++        {
++            errorCount = s_Errors;
++            warningCount = s_Warnings;
++            logCount = s_Logs;
++        }
++    }
++}
++#endif
+--- /dev/null
++++ b/Editor/Console/ConsoleWindowUtility2022.cs.meta
+@@ -0,0 +1,11 @@
++fileFormatVersion: 2
++guid: 58a3acd17c133ea4484a46388316b952
++MonoImporter:
++  externalObjects: {}
++  serializedVersion: 2
++  defaultReferences: []
++  executionOrder: 0
++  icon: {instanceID: 0}
++  userData: 
++  assetBundleName: 
++  assetBundleVariant: 

@@ -70,6 +70,15 @@ namespace Framework.XYEditor.Bridge
 
         private static async Task<Reply> Request(string endpoint, string body, bool requireSuccess)
         {
+            var json = await RequestJson(endpoint, body);
+            var reply = JsonUtility.FromJson<Reply>(json);
+            if (reply == null || !string.IsNullOrEmpty(reply.error) || (requireSuccess && !reply.success))
+                throw new Exception(reply == null ? "响应无效" : reply.error + " " + reply.errorDetails);
+            return reply;
+        }
+
+        internal static async Task<string> RequestJson(string endpoint, string body = null)
+        {
             var d = await Discover();
             using (var request = new UnityWebRequest("http://127.0.0.1:" + d.port + endpoint, body == null ? "GET" : "POST"))
             {
@@ -86,10 +95,7 @@ namespace Framework.XYEditor.Bridge
                 while (!operation.isDone) await Task.Delay(20);
                 if (request.result != UnityWebRequest.Result.Success)
                     throw new Exception("Pipeline HTTP " + request.responseCode + ": " + request.error);
-                var reply = JsonUtility.FromJson<Reply>(request.downloadHandler.text);
-                if (reply == null || !string.IsNullOrEmpty(reply.error) || (requireSuccess && !reply.success))
-                    throw new Exception(reply == null ? "响应无效" : reply.error + " " + reply.errorDetails);
-                return reply;
+                return request.downloadHandler.text;
             }
         }
     }

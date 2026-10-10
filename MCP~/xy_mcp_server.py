@@ -18,7 +18,7 @@ MCP 配置只需写一次，之后导入任何 Unity 工程都不用再改。
 """
 
 import json, os, sys, time, threading, math
-import urllib.request, urllib.error
+import urllib.request, urllib.error, urllib.parse
 import win32file, win32pipe, pywintypes
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -129,6 +129,7 @@ class UnityPipe:
         self._lock = threading.Lock()
         self._buf = b""
         self._last_error = None
+        self.project_path = None
 
     def set_pipe(self, pipe, explicit=True):
         """切换目标管道（会断开当前连接）。"""
@@ -136,6 +137,7 @@ class UnityPipe:
         self.pipe = pipe
         self.explicit = explicit
         self._last_error = None
+        self.project_path = None
 
     def _read_raw(self, timeout_s: float = 5.0):
         if not self._h:
@@ -307,15 +309,22 @@ _PIPELINE_HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}), _N
 
 
 def bound_project_path():
-    # Do not cache across unity_use_project or reconnects.
+    # Pin the verified project across reloads; never silently switch to another editor.
+    if UP.project_path:
+        return UP.project_path
+    want = _requested_project()
+    if not UP.explicit and want and os.path.isabs(want) and os.path.isdir(want):
+        project = os.path.realpath(want)
+        _pipeline_descriptor(project)
+        UP.set_pipe(PIPE_DIR + PIPE_PREFIX + _sanitize(project), explicit=True)
+        UP.project_path = project
+        return project
     r = UP.call("status", "", timeout_s=5.0)
     path = (r.get("projectPath") or "").strip() if isinstance(r, dict) else ""
-    if path:
-        return path
-    # An explicit absolute project also permits HTTP use while its pipe is unavailable.
-    want = _requested_project()
-    if not UP.explicit and want and os.path.isdir(want):
-        return os.path.abspath(want)
+    if path and os.path.isabs(path):
+        UP.project_path = os.path.realpath(path)
+        UP.explicit = True
+        return UP.project_path
     raise ValueError("无法确定目标工程，请先用 unity_use_project 绑定 Unity 实例。")
 
 
@@ -335,19 +344,28 @@ def _pipeline_descriptor(project):
             actual = os.path.normcase(os.path.realpath(descriptor.get("projectPath") or ""))
             if actual != os.path.normcase(os.path.realpath(project)):
                 raise ValueError("Pipeline 服务信息与目标工程不一致。")
-            return port, token
+            return descriptor
         except (OSError, ValueError):
             if attempt == 2:
                 raise ValueError("Pipeline 尚未就绪：请检查 XY 的 Pipeline 安装状态，并等待 Unity 完成编译。") from None
             time.sleep(0.05)
 
 
-def pipeline_request(endpoint, payload=None, timeout_s=60):
+def pipeline_request(endpoint, payload=None, timeout_s=60, job_handle=None):
     timeout_s = float(timeout_s)
     if not math.isfinite(timeout_s) or not 1 <= timeout_s <= 600:
         raise ValueError("timeout 必须在 1 到 600 秒之间。")
     project = bound_project_path()
-    port, token = _pipeline_descriptor(project)
+    descriptor = _pipeline_descriptor(project)
+    port, token = descriptor["port"], descriptor["evalToken"]
+    started = descriptor.get("startedAt")
+    if job_handle is not None:
+        if os.path.normcase(os.path.realpath(job_handle["projectPath"])) != os.path.normcase(project):
+            return False, {"error": "任务属于另一工程，请先切换到任务工程。", "code": "job_project_mismatch", "retryable": False}
+        if not started or job_handle["serverStartedAt"] != started:
+            return False, {"error": "Pipeline 已重启或发生域重载，原内存任务已失效。请核实操作结果，不要自动重放。", "code": "job_session_expired", "retryable": False, "outcomeUnknown": True}
+    if payload and payload.get("job") and not started:
+        return False, {"error": "此 Pipeline 未提供任务会话标识，无法安全跟踪后台任务。", "code": "job_session_unavailable", "retryable": False}
     data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         "http://127.0.0.1:%d%s" % (port, endpoint), data=data,
@@ -363,39 +381,79 @@ def pipeline_request(endpoint, payload=None, timeout_s=60):
         raw = e.read().decode("utf-8", errors="replace")
     except (urllib.error.URLError, OSError, TimeoutError):
         # An exec may already have run. Automatic replay could duplicate scene edits/builds.
-        return False, {"error": "Pipeline 连接中断或超时；命令结果未知，未自动重放。请查询状态后再决定是否重试。"}
+        return False, {"error": "Pipeline 连接中断或超时，未自动重放。读取可重试；修改结果未知，请先查询状态。", "code": "transport_interrupted", "retryable": payload is None, "outcomeUnknown": payload is not None}
     try:
         result = json.loads(raw)
     except ValueError:
-        return False, {"error": "Pipeline 返回了非 JSON 响应。", "httpStatus": status}
+        return False, {"error": "Pipeline 返回了非 JSON 响应。", "code": "invalid_response", "httpStatus": status, "outcomeUnknown": payload is not None}
     if not isinstance(result, dict):
         return False, {"error": "Pipeline 响应格式无效。", "httpStatus": status}
-    ok = 200 <= status < 300 and result.get("success") is not False and not result.get("error")
+    if status >= 400:
+        result.setdefault("httpStatus", status)
+        if job_handle is not None and status == 404:
+            result.setdefault("code", "job_unavailable")
+            result.setdefault("recovery", "任务不存在、已过保留期或该服务不支持任务接口。请核实结果，不要自动重放。")
+    ok = 200 <= status < 300 and result.get("success") is not False and not result.get("error") and result.get("state") not in ("failed", "canceled")
+    submitted = result.get("result")
+    if isinstance(submitted, dict) and submitted.get("success") is False:
+        ok = False
+    if ok and payload and payload.get("job") and isinstance(submitted, dict) and submitted.get("jobId"):
+        result["xyJob"] = {"id": submitted["jobId"], "projectPath": project, "serverStartedAt": started}
     return ok, result
 
 
 def run_pipeline_tool(name, args):
     try:
+        if not isinstance(args, dict):
+            raise ValueError("工具参数必须是 JSON 对象。")
         timeout = float(args.get("timeout", 60))
         if not math.isfinite(timeout) or not 1 <= timeout <= 600:
             raise ValueError("timeout 必须在 1 到 600 秒之间。")
         if name == "unity_pipeline_commands":
-            if "command" in args and not isinstance(args["command"], str):
-                raise ValueError("command 必须是字符串。")
-            ok, result = pipeline_request("/api/commands", timeout_s=timeout)
+            for key in ("command", "query", "tag", "detail"):
+                if key in args and not isinstance(args[key], str):
+                    raise ValueError(key + " 必须是字符串。")
             command = args.get("command")
+            if command and any(key in args for key in ("query", "tag", "detail", "offset", "limit")):
+                raise ValueError("command 精确查询不能与筛选或分页参数混用。")
+            detail = args.get("detail", "compact" if args.get("query") or args.get("tag") else "tags")
+            if detail not in ("full", "compact", "tags"):
+                raise ValueError("detail 必须是 full、compact 或 tags。")
+            query = {"detail": "full" if command else detail}
+            if command:
+                query["query"] = command
+            else:
+                query.update({k: args[k] for k in ("query", "tag") if args.get(k)})
+                for key, default, minimum in (("offset", 0, 0), ("limit", 50, 1)):
+                    value = args.get(key, default)
+                    if type(value) is not int or value < minimum or (key == "limit" and value > 200):
+                        raise ValueError(key + " 必须是有效整数（offset >= 0，limit 为 1–200）。")
+                    query[key] = value
+            ok, result = pipeline_request("/api/commands?" + urllib.parse.urlencode(query), timeout_s=timeout)
             if ok and command:
                 matches = [c for c in result.get("commands", []) if c.get("name") == command]
                 if not matches:
                     ok, result = False, {"error": "未知 Pipeline 命令: " + command}
                 else:
-                    result = {"commands": matches}
+                    result = {"commands": matches, "count": len(matches), "total": len(matches), "server": result.get("server")}
+            elif ok and isinstance(result.get("count"), int) and isinstance(result.get("total"), int):
+                next_offset = result.get("offset", 0) + result["count"]
+                result["nextOffset"] = next_offset if next_offset < result["total"] else None
+        elif name == "unity_pipeline_job":
+            job = args.get("job")
+            action = args.get("action", "status")
+            if not isinstance(job, dict) or any(not isinstance(job.get(k), str) or not job[k] for k in ("id", "projectPath", "serverStartedAt")):
+                raise ValueError("job 必须是提交任务返回的完整 xyJob 对象。")
+            if action not in ("status", "cancel"):
+                raise ValueError("action 必须是 status 或 cancel。")
+            endpoint = "/api/job?" + urllib.parse.urlencode({"id": job["id"]}) if action == "status" else "/api/job/cancel"
+            ok, result = pipeline_request(endpoint, None if action == "status" else {"id": job["id"]}, timeout, job_handle=job)
         elif name == "unity_cli":
             spec = args.get("spec", "")
             if not isinstance(spec, str):
                 raise ValueError("spec 必须是字符串。")
             payload = {"commandLine": spec, "timeout": int(timeout * 1000)} if spec.strip() else None
-            ok, result = pipeline_request("/api/exec" if payload else "/api/commands", payload, timeout)
+            ok, result = pipeline_request("/api/exec" if payload else "/api/commands?detail=compact", payload, timeout)
             if ok and payload is None:
                 return PipelineToolResult(compact_command_list(json.dumps(result, ensure_ascii=False)))
         else:
@@ -403,12 +461,18 @@ def run_pipeline_tool(name, args):
             parameters = args.get("parameters", {})
             if not isinstance(command, str) or not command.strip() or not isinstance(parameters, dict):
                 raise ValueError("command 必须是非空字符串，parameters 必须是对象。")
-            ok, result = pipeline_request("/api/exec", {
+            job = args.get("job", False)
+            if type(job) is not bool:
+                raise ValueError("job 必须是布尔值。")
+            payload = {
                 "command": command, "parameters": parameters, "timeout": int(timeout * 1000)
-            }, timeout)
+            }
+            if job:
+                payload["job"] = True
+            ok, result = pipeline_request("/api/exec", payload, timeout)
         return PipelineToolResult(json.dumps(result, ensure_ascii=False), not ok)
     except (ValueError, TypeError, OSError) as e:
-        return PipelineToolResult(json.dumps({"error": str(e)}, ensure_ascii=False), True)
+        return PipelineToolResult(json.dumps({"error": str(e), "code": "client_validation_or_discovery_failed"}, ensure_ascii=False), True)
 
 
 def compact_command_list(txt: str) -> str:
@@ -492,6 +556,15 @@ def cmd_use_project(keyword: str) -> str:
     keyword = (keyword or "").strip()
     if not keyword:
         return '请提供工程名或路径片段，例如 unity_use_project "XY_Editor"'
+    if os.path.isabs(keyword) and os.path.isdir(keyword):
+        project = os.path.realpath(keyword)
+        try:
+            _pipeline_descriptor(project)
+        except ValueError as e:
+            return PipelineToolResult(json.dumps({"error": str(e)}, ensure_ascii=False), True)
+        UP.set_pipe(PIPE_DIR + PIPE_PREFIX + _sanitize(project))
+        UP.project_path = project
+        return "已绑定 Pipeline 工程：" + project
     live = list_live_pipes()
     if not live:
         return "未发现任何存活的 Unity Bridge。"
@@ -501,6 +574,8 @@ def cmd_use_project(keyword: str) -> str:
     UP.set_pipe(p)
     info = probe_pipe(p)
     if info:
+        if info.get("projectPath"):
+            UP.project_path = os.path.realpath(info["projectPath"])
         return (
             f"✅ 已绑定到 {info['projectName'] or p}\n"
             f"   path : {info['projectPath'] or '?'}\n"
@@ -737,19 +812,37 @@ ALL_TOOLS = [
 ALL_TOOLS.extend([
     {
         "name": "unity_pipeline",
-        "description": "直接调用 Pipeline HTTP 命令，无需 Unity CLI。参数名及类型通过 unity_pipeline_commands 查询。异步命令需查询对应 *_status；超时不会自动重放。",
+        "description": "直接调用官方 Pipeline HTTP 命令。先用 unity_pipeline_commands 查询实时参数规范。耗时调用可用 job=true，凭返回的 xyJob 查询后台任务；任务完成仅代表命令返回，build 等异步命令仍需查询各自 *_status。超时不自动重放。",
         "inputSchema": {"type": "object", "properties": {
             "command": {"type": "string", "description": "Pipeline 命令名"},
             "parameters": {"type": "object", "description": "命令参数，保留数字、布尔、数组等 JSON 类型"},
+            "job": {"type": "boolean", "description": "以官方后台任务提交，返回 xyJob 供 unity_pipeline_job 查询。任务不跨域重载保留。默认 false"},
             "timeout": {"type": "number", "minimum": 1, "maximum": 600, "description": "超时秒数，默认 60"}
         }, "required": ["command"]}
     },
     {
         "name": "unity_pipeline_commands",
-        "description": "读取 Pipeline 实时命令与参数 schema；传 command 查看单条命令，不传则返回全部。",
+        "description": "按需发现官方实时命令。无参数返回分类索引；用 tag 或 query 获取精简列表（默认每页 50 条），按 nextOffset 翻页；最后用 command 获取单条命令完整 schema。保留英文原始规范，新增命令自动可用。",
         "inputSchema": {"type": "object", "properties": {
-            "command": {"type": "string", "description": "可选：需要查询的命令名"}
+            "command": {"type": "string", "description": "精确命令名，返回完整 schema，不能与筛选或分页混用"},
+            "query": {"type": "string", "description": "匹配命令名、说明或标签的子串"},
+            "tag": {"type": "string", "description": "分类及其子分类，如 assets 或 baking/lighting"},
+            "detail": {"type": "string", "enum": ["tags", "compact", "full"], "description": "无筛选默认 tags，有 query/tag 默认 compact；full 包含参数"},
+            "offset": {"type": "integer", "minimum": 0},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+            "timeout": {"type": "number", "minimum": 1, "maximum": 600}
         }, "required": []}
+    },
+    {
+        "name": "unity_pipeline_job",
+        "description": "查询或请求取消官方后台任务。原样传入提交时返回的 xyJob，先绑定其工程。服务重启或域重载后会报告任务失效，不会重放。running 任务取消是协作式的，需继续查询终态；已完成任务仅在官方保留期内可查。",
+        "inputSchema": {"type": "object", "properties": {
+            "job": {"type": "object", "properties": {
+                "id": {"type": "string"}, "projectPath": {"type": "string"}, "serverStartedAt": {"type": "string"}
+            }, "required": ["id", "projectPath", "serverStartedAt"]},
+            "action": {"type": "string", "enum": ["status", "cancel"], "default": "status"},
+            "timeout": {"type": "number", "minimum": 1, "maximum": 600}
+        }, "required": ["job"]}
     }
 ])
 
@@ -765,6 +858,7 @@ TOOL_GROUPS = {
         "unity_cli",
         "unity_pipeline",
         "unity_pipeline_commands",
+        "unity_pipeline_job",
     ],
     "assets": [  # 资源管理 — 6 tools
         "unity_select_asset",
@@ -881,7 +975,7 @@ def handle(name: str, args: dict, close_after: bool = False) -> str:
         elif name == "unity_unsubscribe":
             r = UP.call("unsubscribe", "")
             return f"{r.get('message', r)}"
-        elif name in ("unity_cli", "unity_pipeline", "unity_pipeline_commands"):
+        elif name in ("unity_cli", "unity_pipeline", "unity_pipeline_commands", "unity_pipeline_job"):
             return run_pipeline_tool(name, args)
         elif name == "unity_get_component":
             r = UP.call("get_component", args["target"])

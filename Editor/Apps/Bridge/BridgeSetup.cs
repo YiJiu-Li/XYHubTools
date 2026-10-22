@@ -18,6 +18,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Security.Cryptography;
 using UnityEditor;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
@@ -60,6 +61,58 @@ namespace Framework.XYEditor.Bridge
 
         /// <summary>Hub 脚本的固定安装路径。</summary>
         internal static string StableScript => Path.Combine(StableDir, "xy_mcp_server.py");
+
+        private static double _nextScriptCheck;
+        private static string _scriptStatus;
+
+        internal static string ScriptStatus
+        {
+            get
+            {
+                if (_scriptStatus != null && EditorApplication.timeSinceStartup < _nextScriptCheck)
+                    return _scriptStatus;
+                _nextScriptCheck = EditorApplication.timeSinceStartup + 2;
+                try
+                {
+                    string source = Path.Combine(McpSourceDir, "xy_mcp_server.py");
+                    if (!File.Exists(StableScript)) return _scriptStatus = "尚未安装 Hub 脚本";
+                    string installedText = File.ReadAllText(StableScript);
+                    _scriptStatus = "已安装 " + ScriptVersion(installedText) + " / " + ToolCount(installedText) + " 个工具";
+                    _scriptStatus += File.Exists(source)
+                        ? (ScriptHash(source) == ScriptHash(StableScript) ? " / 与安装源一致" : " / 与安装源不同，请检查后更新")
+                        : " / 安装源不存在";
+                    return _scriptStatus;
+                }
+                catch (Exception ex) { return _scriptStatus = "脚本检查失败: " + ex.Message; }
+            }
+        }
+
+        private static string ScriptVersion(string text)
+        {
+            var match = Regex.Match(text, "(?m)^SERVER_VERSION\\s*=\\s*\"([^\"]+)\"");
+            return match.Success ? match.Groups[1].Value : "0.0.0";
+        }
+
+        private static int ToolCount(string text) => Regex.Matches(text, "\"name\"\\s*:\\s*\"unity_[^\"]+\"").Count;
+
+        private static string ScriptHash(string path)
+        {
+            using (var sha = SHA256.Create())
+                return BitConverter.ToString(sha.ComputeHash(File.ReadAllBytes(path))).Replace("-", "");
+        }
+
+        private static void InstallScript(string source, string destination)
+        {
+            if (File.Exists(destination) && ScriptHash(source) == ScriptHash(destination)) return;
+            string temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.Copy(source, temporary);
+                if (File.Exists(destination)) File.Replace(temporary, destination, destination + ".previous");
+                else File.Move(temporary, destination);
+            }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        }
 
         // ═══════════════════════════════════════════════════════════
         //  XYHub 面板入口
@@ -145,13 +198,26 @@ namespace Framework.XYEditor.Bridge
                     return false;
                 }
 
+                string sourceText = File.ReadAllText(src);
+                if (ToolCount(sourceText) == 0) throw new InvalidDataException("安装源未定义 MCP 工具");
+                if (File.Exists(StableScript))
+                {
+                    string installedText = File.ReadAllText(StableScript);
+                    Version sourceVersion, installedVersion;
+                    if ((Version.TryParse(ScriptVersion(sourceText), out sourceVersion)
+                        && Version.TryParse(ScriptVersion(installedText), out installedVersion)
+                        && sourceVersion < installedVersion) || ToolCount(sourceText) < ToolCount(installedText))
+                        throw new InvalidDataException("安装源版本或工具数量低于已安装脚本，已阻止覆盖。请更新当前工程的 MCP~ 安装源。");
+                }
+
                 // 1) 固定位置：Hub 模式的主副本，与工程无关，所有配置都指向它
                 Directory.CreateDirectory(StableDir);
-                File.Copy(src, StableScript, overwrite: true);
+                InstallScript(src, StableScript);
                 Debug.Log("[XY Bridge] 已安装 Hub 脚本: " + StableScript);
 
                 // 2) 工程根目录：保留给旧的「一工程一脚本」配置，新配置不再引用
-                File.Copy(src, Path.Combine(ProjectRoot, "xy_mcp_server.py"), overwrite: true);
+                InstallScript(src, Path.Combine(ProjectRoot, "xy_mcp_server.py"));
+                _nextScriptCheck = 0;
 
                 AssetDatabase.Refresh();
                 return true;

@@ -1,0 +1,4 @@
+interface:
+  display_name: "XY 桌面 Agent 开发专家"
+  short_description: "面向 Rust、Tauri、Vue 的 Agent 运行协议、流式 UI 与工具系统开发"
+  default_prompt: "使用 $xy-agent-desktop-dev 处理桌面 Agent 开发任务，先核对当前架构，再完成范围内的实现与验证。"

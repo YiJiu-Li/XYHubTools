@@ -1,0 +1,7 @@
+{
+  "id": "xy-agent-desktop-dev",
+  "name": "XY 桌面 Agent 开发专项",
+  "version": "1.0.0",
+  "description": "Rust、Tauri、Vue 桌面 Agent 的运行、工具、流式状态和持久化设计。",
+  "files": ["SKILL.md", "agents/openai.yaml", "references/runtime-architecture.md"]
+}

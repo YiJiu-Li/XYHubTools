@@ -1,0 +1,4 @@
+interface:
+  display_name: "XY Unity 智能体"
+  short_description: "基于 XY MCP 的 Unity 点位开发、故障诊断与批量编辑验证工作流"
+  default_prompt: "使用 $xy-unity-agent 处理当前 Unity 任务，核对工程与实际资源，并按请求范围完成分析或修改验证。"

@@ -1,0 +1,4 @@
+interface:
+  display_name: "XY Shader / VFX 专家"
+  short_description: "按实际 Unity 管线实现 Shader 与 VFX，并验证材质效果和渲染性能"
+  default_prompt: "使用 $xy-unity-shader 处理当前材质、Shader 或特效任务，核对实际管线和目标平台并验证结果。"

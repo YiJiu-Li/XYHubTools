@@ -17,11 +17,14 @@ Hub 模式 —— 一个 server 服务所有 Unity 工程
 MCP 配置只需写一次，之后导入任何 Unity 工程都不用再改。
 """
 
-import json, os, sys, time, threading, math
+import json, os, sys, time, threading, math, hashlib
 import urllib.request, urllib.error, urllib.parse
 import win32file, win32pipe, pywintypes
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+SERVER_VERSION = "1.8.0"
+with open(__file__, "rb") as _script_file:
+    RUNNING_SCRIPT_SHA256 = hashlib.sha256(_script_file.read()).hexdigest()
 PIPE_PREFIX = "xybridge_unity_"
 # 注意：不能用 raw string —— r"\\.\pipe\\" 里的 \\ 是两个字面反斜杠，
 # 且 raw string 不能以单个反斜杠结尾。这里用普通字符串显式转义。
@@ -237,14 +240,9 @@ class UnityPipe:
             req = json.dumps({"id": req_id, "type": t, "message": m}) + "\n"
             try:
                 win32file.WriteFile(self._h, req.encode("utf-8"))
-            except:
-                self._h = None
-                if not self.connect():
-                    return {"ok": False, "error": "Unity 连接断开，重连失败"}
-                try:
-                    win32file.WriteFile(self._h, req.encode("utf-8"))
-                except:
-                    return {"ok": False, "error": "写入管道失败"}
+            except Exception:
+                self.close()
+                return {"ok": False, "error": "写入管道失败；执行结果未知，未自动重放请求"}
 
             deadline = time.time() + timeout_s
             while time.time() < deadline:
@@ -277,7 +275,8 @@ class UnityPipe:
                     continue
                 if r.get("id") == req_id or r.get("reply_to") == req_id:
                     return r
-            return {"ok": False, "error": "响应超时"}
+            self.close()
+            return {"ok": False, "error": "响应超时；执行结果未知，未自动重放请求"}
 
     def close(self):
         if self._h:
@@ -298,6 +297,41 @@ class PipelineToolResult(str):
         result = super().__new__(cls, text)
         result.is_error = is_error
         return result
+
+
+def tool_result(value):
+    """Normalize both transport failures and service JSON failures for MCP."""
+    error = getattr(value, "is_error", False)
+    text = str(value)
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            error = error or data.get("ok") is False or data.get("success") is False or bool(data.get("error"))
+    except (ValueError, TypeError):
+        error = error or text.startswith(("❌", "未知:", "❌ 失败"))
+    return PipelineToolResult(text, error)
+
+
+def script_info(path):
+    try:
+        with open(path, "rb") as stream:
+            contents = stream.read()
+        return {"path": os.path.abspath(path), "sha256": hashlib.sha256(contents).hexdigest()}
+    except OSError as e:
+        return {"path": os.path.abspath(path), "error": str(e)}
+
+
+def bridge_health(project):
+    installed = script_info(os.path.join(os.path.expanduser("~"), ".xybridge", "xy_mcp_server.py"))
+    source = script_info(os.path.join(project, "Assets", "XYHubTools", "MCP~", "xy_mcp_server.py")) if project else None
+    return {
+        "version": SERVER_VERSION, "pid": os.getpid(), "scriptPath": os.path.abspath(__file__),
+        "runningSha256": RUNNING_SCRIPT_SHA256, "disk": script_info(__file__),
+        "installed": installed, "projectSource": source,
+        "registeredTools": len(ALL_TOOLS), "exposedTools": len(TOOLS),
+        "restartRequired": script_info(__file__).get("sha256") != RUNNING_SCRIPT_SHA256,
+        "sourceMatchesInstalled": source.get("sha256") == installed.get("sha256") if source and "sha256" in source and "sha256" in installed else None,
+    }
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -584,6 +618,24 @@ def cmd_use_project(keyword: str) -> str:
     return f"✅ 已绑定到 {p}"
 
 
+ADVANCED_MESSAGES = {
+    "unity_shadergraph": "shadergraph",
+    "unity_physics": "physics",
+    "unity_profiler": "profiler",
+    "unity_asset_preview": "asset_preview",
+    "unity_frame_debugger": "frame_debugger",
+}
+
+
+def run_advanced_tool(name, args):
+    # 保留数字和布尔类型；不重放可能修改资源的请求。
+    r = UP.call(ADVANCED_MESSAGES[name], json.dumps(args, ensure_ascii=False), timeout_s=60)
+    if not r.get("ok"):
+        return json.dumps({"ok": False, "error": r.get("error", r.get("message", "Unity 请求失败"))}, ensure_ascii=False)
+    message = r.get("message", "")
+    return message if isinstance(message, str) else json.dumps(message, ensure_ascii=False)
+
+
 # ═══════════════ 工具定义 ═══════════════
 ALL_TOOLS = [
     {
@@ -593,7 +645,7 @@ ALL_TOOLS = [
     },
     {
         "name": "unity_status",
-        "description": "获取 Unity Editor 状态（编辑/播放）和当前场景",
+        "description": "获取 Unity 状态、场景、MCP 运行版本与脚本哈希、工具数量、安装一致性和是否需要重启。",
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
     {
@@ -846,6 +898,185 @@ ALL_TOOLS.extend([
     }
 ])
 
+ALL_TOOLS.extend([
+    {
+        "name": "unity_shadergraph",
+        "description": "Shader Graph 读写，使用 Unity GraphData API。先用 status 检查支持，再用 nodes/properties 获取 ID 和槽位。写入前用 close 关闭图窗口；undo 回滚自动保存的文件快照。节点类型支持短名，连接支持槽位 ID 或名称。",
+        "inputSchema": {"type": "object", "properties": {
+            "op": {"type": "string", "enum": ["status", "list", "info", "nodes", "edges", "properties", "add_property", "set_property_default", "create", "open", "close", "undo", "add_node", "remove_node", "move_node", "connect", "disconnect", "set_value", "node_types"]},
+            "path": {"type": "string", "description": "Assets/ 下的 .shadergraph 路径"},
+            "nodeType": {"type": "string", "description": "节点类型，如 Add、Multiply、Property"},
+            "nodeId": {"type": "string"},
+            "propertyId": {"type": "string", "description": "黑板属性 objectId"},
+            "name": {"type": "string", "description": "新增属性名"},
+            "type": {"type": "string", "enum": ["float", "vector2", "vector3", "vector4", "color", "bool", "texture2d"]},
+            "x": {"type": "number"}, "y": {"type": "number"},
+            "outputNodeId": {"type": "string"}, "outputSlotId": {"type": "integer"},
+            "outputSlot": {"type": "string", "description": "输出槽名，如 Out"},
+            "inputNodeId": {"type": "string"}, "inputSlotId": {"type": "integer"},
+            "inputSlot": {"type": "string", "description": "输入槽名，如 A、Base Color"},
+            "field": {"type": "string", "description": "set_value 字段，默认 m_Value"},
+            "value": {"type": "string", "description": "数值或逗号分隔向量，如 0.5、1,0,0,1"},
+            "template": {"type": "string", "enum": ["lit", "unlit", "sprite_lit", "sprite_unlit", "blank"]},
+            "overwrite": {"type": "boolean"}, "filter": {"type": "string"},
+            "max": {"type": "integer"}, "withSlots": {"type": "boolean"}
+        }, "required": ["op"]}
+    },
+    {
+        "name": "unity_physics",
+        "description": "只读物理查询：射线、球形、盒形和重叠检测。坐标为 x,y,z 字符串，返回命中对象、距离、点及法线。layerMask 支持层名或整型掩码字符串。",
+        "inputSchema": {"type": "object", "properties": {
+            "op": {"type": "string", "enum": ["raycast", "raycast_all", "spherecast", "spherecast_all", "boxcast", "linecast", "overlap_sphere", "overlap_box"]},
+            "origin": {"type": "string"}, "direction": {"type": "string"},
+            "position": {"type": "string"}, "from": {"type": "string"}, "to": {"type": "string"},
+            "maxDistance": {"type": "number"}, "radius": {"type": "number"},
+            "halfExtents": {"type": "string", "description": "盒的半尺寸 x,y,z"},
+            "rotation": {"type": "string", "description": "四元数 x,y,z,w"},
+            "layerMask": {"type": "string"}, "queryTriggers": {"type": "boolean"},
+            "maxResults": {"type": "integer"}
+        }, "required": ["op"]}
+    },
+    {
+        "name": "unity_profiler",
+        "description": "性能采样：status 查询状态；start 后等待编辑器渲染几帧，再用 stats/overview 获取 CPU、GC、内存和渲染统计；stop 停止；save 保存 .raw。无帧时返回 pending，请稍后查询。",
+        "inputSchema": {"type": "object", "properties": {
+            "op": {"type": "string", "enum": ["status", "start", "stop", "stats", "overview", "save"]},
+            "deep": {"type": "boolean", "description": "深度采样，开销大"},
+            "gpu": {"type": "boolean"}, "reset": {"type": "boolean"},
+            "frames": {"type": "integer", "description": "stats 最近帧数"},
+            "area": {"type": "string", "description": "overview 区域，如 CPU、Rendering、Memory、GPU"},
+            "path": {"type": "string", "description": "save 输出 .raw 路径"}
+        }, "required": ["op"]}
+    },
+    {
+        "name": "unity_asset_preview",
+        "description": "将材质、Prefab、贴图或图标渲染为 PNG，返回磁盘路径。op=get 用 path；batch 用 paths。预览异步生成时返回 pending=true，稍后重试。",
+        "inputSchema": {"type": "object", "properties": {
+            "op": {"type": "string", "enum": ["get", "batch"]},
+            "path": {"type": "string", "description": "Assets/ 下的资源路径"},
+            "paths": {"type": "string", "description": "逗号或换行分隔的资源路径"},
+            "width": {"type": "integer", "minimum": 32, "maximum": 1024},
+            "height": {"type": "integer", "minimum": 32, "maximum": 1024},
+            "transparent": {"type": "boolean"}, "maxResults": {"type": "integer"}
+        }, "required": ["op"]}
+    },
+    {
+        "name": "unity_frame_debugger",
+        "description": "帧调试：status 查询；enable/disable 开关捕获；events/details 获取事件；summary 汇总 DrawCall、三角形、着色器及合批中断原因。捕获后可能返回 pending，请等待编辑器渲染一帧再查询。",
+        "inputSchema": {"type": "object", "properties": {
+            "op": {"type": "string", "enum": ["status", "enable", "disable", "events", "details", "summary"]},
+            "offset": {"type": "integer"}, "limit": {"type": "integer"},
+            "index": {"type": "integer"}, "keepEnabled": {"type": "boolean", "description": "summary 后保留捕获"}
+        }, "required": ["op"]}
+    }
+])
+
+BATCH_TOOLS = {
+    "unity_set_property", "unity_get_component", "unity_get_scene_graph", "unity_get_scene_roots",
+    "unity_get_selection", "unity_find_assets", "unity_get_prefab_structure", "unity_physics",
+}
+ALL_TOOLS.append({
+    "name": "unity_batch",
+    "description": "批量属性编辑与只读验证。先校验全部步骤再顺序执行，首个错误或断言失败即停止；不是事务，不自动回滚，已完成的属性编辑可在 Unity Undo。默认 dry_run=true 仅检查参数结构，不查询对象或验证属性存在。expect 对工具返回 JSON 的点分隔路径进行精确相等断言。",
+    "inputSchema": {"type": "object", "additionalProperties": False, "properties": {
+        "dry_run": {"type": "boolean", "default": True},
+        "steps": {"type": "array", "minItems": 1, "maxItems": 50, "items": {
+            "type": "object", "additionalProperties": False, "properties": {
+                "tool": {"type": "string", "enum": sorted(BATCH_TOOLS)},
+                "arguments": {"type": "object"},
+                "expect": {"type": "object", "additionalProperties": False, "properties": {
+                    "path": {"type": "string", "description": "JSON 路径，如 hit、roots.0；空串表示整个结果"},
+                    "equals": {"description": "期望的 JSON 值"}
+                }, "required": ["path", "equals"]}
+            }, "required": ["tool", "arguments"]
+        }}
+    }, "required": ["steps"]}
+})
+
+
+def validate_arguments(value, schema, path="arguments"):
+    kind = schema.get("type")
+    valid = {
+        "object": isinstance(value, dict), "array": isinstance(value, list),
+        "string": isinstance(value, str), "boolean": type(value) is bool,
+        "integer": type(value) is int,
+        "number": type(value) in (int, float) and math.isfinite(value),
+    }
+    if kind and not valid.get(kind, False):
+        raise ValueError(path + " 类型应为 " + kind)
+    if "enum" in schema and value not in schema["enum"]:
+        raise ValueError(path + " 不在允许值中")
+    if isinstance(value, dict):
+        props = schema.get("properties", {})
+        for key in schema.get("required", []):
+            if key not in value: raise ValueError(path + " 缺少 " + key)
+        for key, item in value.items():
+            if key not in props:
+                if schema.get("additionalProperties") is False: raise ValueError(path + " 未知参数 " + key)
+            else:
+                validate_arguments(item, props[key], path + "." + key)
+    elif isinstance(value, list):
+        if not schema.get("minItems", 0) <= len(value) <= schema.get("maxItems", len(value)):
+            raise ValueError(path + " 数量超出范围")
+        for index, item in enumerate(value):
+            validate_arguments(item, schema.get("items", {}), path + "." + str(index))
+    elif type(value) in (int, float):
+        if not math.isfinite(value) or value < schema.get("minimum", -math.inf) or value > schema.get("maximum", math.inf):
+            raise ValueError(path + " 数值超出范围")
+
+
+def json_equal(actual, expected):
+    if type(actual) in (int, float) and type(expected) in (int, float):
+        return actual == expected
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(actual, dict):
+        return actual.keys() == expected.keys() and all(json_equal(actual[k], expected[k]) for k in actual)
+    if isinstance(actual, list):
+        return len(actual) == len(expected) and all(json_equal(a, b) for a, b in zip(actual, expected))
+    return actual == expected
+
+
+def run_batch(args):
+    definitions = {t["name"]: t for t in TOOLS}
+    validate_arguments(args, definitions["unity_batch"]["inputSchema"])
+    for i, step in enumerate(args["steps"]):
+        if step["tool"] not in definitions: raise ValueError("步骤工具未在当前分组启用: " + step["tool"])
+        schema = dict(definitions[step["tool"]]["inputSchema"], additionalProperties=False)
+        validate_arguments(step["arguments"], schema, "steps." + str(i) + ".arguments")
+    if args.get("dry_run", True):
+        return json.dumps({"ok": True, "dryRun": True, "validatedSteps": len(args["steps"]), "executedSteps": 0})
+    project = bound_project_path()
+    binding = cmd_use_project(project)
+    if str(binding).startswith("❌"): raise RuntimeError(binding)
+    results = []
+    deadline = time.monotonic() + 120
+    for i, step in enumerate(args["steps"]):
+        if time.monotonic() >= deadline:
+            return json.dumps({"ok": False, "error": "批处理达到时间上限，剩余步骤未执行", "projectPath": project, "results": results, "executedSteps": len(results)}, ensure_ascii=False)
+        result = handle(step["tool"], step["arguments"])
+        try: data = json.loads(result)
+        except ValueError: data = str(result)
+        item = {"index": i, "tool": step["tool"], "ok": not result.is_error, "result": data}
+        if isinstance(data, dict) and data.get("pending"):
+            item.update(ok=False, error="操作尚未完成，后续步骤未执行")
+        if item["ok"] and "expect" in step:
+            try:
+                actual = data
+                for segment in step["expect"]["path"].split(".") if step["expect"]["path"] else []:
+                    actual = actual[int(segment)] if isinstance(actual, list) else actual[segment]
+                # JSON bool 与 number 不视为相等。
+                item["verified"] = json_equal(actual, step["expect"]["equals"])
+                if not item["verified"]: item.update(ok=False, error="验证结果与期望不符", actual=actual)
+            except (KeyError, IndexError, TypeError, ValueError):
+                item.update(ok=False, verified=False, error="验证路径不存在或不可读取")
+        results.append(item)
+        if not item["ok"]: break
+    return json.dumps({"ok": len(results) == len(args["steps"]) and all(r["ok"] for r in results),
+                       "dryRun": False, "projectPath": project, "executedSteps": len(results),
+                       "totalSteps": len(args["steps"]), "results": results}, ensure_ascii=False)
+
+
 # ═══════════════ 工具分组（保留给 stdio 按需裁剪工具列表）═══════════════
 TOOL_GROUPS = {
     "core": [  # 基础通讯 & 多工程
@@ -868,7 +1099,8 @@ TOOL_GROUPS = {
         "unity_recompile_scripts",
         "unity_get_prefab_structure",
     ],
-    "scene": [  # 场景 & 运行时 — 8 tools
+    "scene": [  # 场景 & 运行时，以及批量编辑验证
+        "unity_batch",
         "unity_execute_code",
         "unity_get_selection",
         "unity_get_scene_graph",
@@ -878,6 +1110,8 @@ TOOL_GROUPS = {
         "unity_get_component",
         "unity_set_property",
     ],
+    "shader": ["unity_shadergraph"],
+    "inspect": ["unity_physics", "unity_profiler", "unity_asset_preview", "unity_frame_debugger"],
     "events": [  # 事件订阅 & 截屏 — 5 tools
         "unity_subscribe",
         "unity_subscribe_status",
@@ -890,12 +1124,46 @@ TOOL_GROUPS = {
 # 默认：全部工具（兼容旧配置）
 TOOLS = ALL_TOOLS
 
+def validate_registry():
+    names = [tool["name"] for tool in ALL_TOOLS]
+    if len(names) != len(set(names)):
+        raise ValueError("MCP 工具名称重复")
+    for group, members in TOOL_GROUPS.items():
+        if not set(members) <= set(names):
+            raise ValueError("分组引用未注册工具: " + group)
+    if not set(ADVANCED_MESSAGES) <= set(names):
+        raise ValueError("高级工具缺少 schema 注册")
+
+validate_registry()
+
 
 def handle(name: str, args: dict, close_after: bool = False) -> str:
+    if name not in {t["name"] for t in TOOLS}:
+        return PipelineToolResult(json.dumps({"ok": False, "error": "工具未注册或未在当前分组启用: " + str(name)}, ensure_ascii=False), True)
+    if not isinstance(args, dict):
+        return PipelineToolResult('{"ok":false,"error":"arguments must be an object"}', True)
+    try:
+        definition = next(t for t in TOOLS if t["name"] == name)
+        validate_arguments(args, definition["inputSchema"])
+    except (ValueError, TypeError) as e:
+        return PipelineToolResult(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False), True)
+    return tool_result(_handle_impl(name, args, close_after))
+
+
+def _unity_call(*args, **kwargs):
+    result = UP.call(*args, **kwargs)
+    if not result.get("ok"):
+        raise RuntimeError(result.get("error", result.get("message", "Unity 请求失败")))
+    return result
+
+
+def _handle_impl(name: str, args: dict, close_after: bool = False) -> str:
     # close_after 默认 False：stdio 进程常驻，复用同一条管道连接，
     # 避免每次工具调用都断开重连（重连含 WaitNamedPipe + 暖场 ping，最多 5s）。
     # 需要强制本次调用后关闭连接时显式传 True。
     try:
+        if name == "unity_batch":
+            return run_batch(args)
         if name == "unity_list_projects":
             return cmd_list_projects()
         elif name == "unity_use_project":
@@ -909,76 +1177,79 @@ def handle(name: str, args: dict, close_after: bool = False) -> str:
             return f"✅ pong | PID: {r.get('processId', '?')}{where}"
         elif name == "unity_status":
             r = UP.call("status")
-            return f"状态: {r.get('message', r)}"
+            return json.dumps({"ok": bool(r.get("ok")), "state": r.get("message"), "error": r.get("error"),
+                               "projectPath": r.get("projectPath"), "bridge": bridge_health(r.get("projectPath"))}, ensure_ascii=False)
         elif name == "unity_execute_code":
             r = UP.call("execute_code", args["code"])
             if r.get("ok"):
                 return f"✅ 执行成功:\n{r.get('message', '(无输出)')}"
             return f"❌ 失败:\n{r.get('error', r.get('message', str(r)))}"
         elif name == "unity_select_asset":
-            UP.call("select_asset", args["asset_path"])
+            _unity_call("select_asset", args["asset_path"])
             return f"✅ 已选中: {args['asset_path']}"
         elif name == "unity_import_assets":
-            r = UP.call("import_assets", args["paths"])
+            r = _unity_call("import_assets", args["paths"])
             return f"✅ {r.get('message', 'done')}"
         elif name == "unity_refresh_asset_database":
-            UP.call("refresh_asset_database")
+            _unity_call("refresh_asset_database")
             return "✅ 已刷新"
         elif name == "unity_recompile_scripts":
-            UP.call("request_recompile")
+            _unity_call("request_recompile")
             return "✅ 已触发"
         elif name == "unity_get_console_logs":
             c = str(args.get("count", 50))
-            r = UP.call("get_console_logs", c)
+            r = _unity_call("get_console_logs", c)
             return f"{r.get('message', r)}"
         elif name == "unity_clear_console":
-            r = UP.call("clear_console")
+            r = _unity_call("clear_console")
             return f"✅ {r.get('message', '已清空')}"
         elif name == "unity_get_selection":
-            r = UP.call("get_selection")
+            r = _unity_call("get_selection")
             return f"当前选中:\n{r.get('message', r)}"
         elif name == "unity_find_assets":
-            r = UP.call("find_assets", args["filter"])
+            r = _unity_call("find_assets", args["filter"])
             return f"{r.get('message', r)}"
         elif name == "unity_get_scene_graph":
             d = str(args.get("depth", 0))
-            r = UP.call("get_scene_graph", d)
+            r = _unity_call("get_scene_graph", d)
             return f"{r.get('message', r)}"
         elif name == "unity_get_scene_roots":
-            r = UP.call("get_scene_roots")
+            r = _unity_call("get_scene_roots")
             return f"{r.get('message', r)}"
         elif name == "unity_play_mode":
-            r = UP.call("play_mode", "")
+            r = _unity_call("play_mode", "")
             return f"{r.get('message', r)}"
         elif name == "unity_screenshot":
             t = args.get("target", "game")
-            r = UP.call("screenshot", t)
+            r = _unity_call("screenshot", t)
             m = str(r.get("message", r))
             if len(m) > 200:
                 return f"✅ 截图成功（{len(m)} 字符 base64，已弃用，建议 screenshot_to_file）"
             return f"❌ {r.get('error', m)}"
         elif name == "unity_screenshot_to_file":
             spec = args.get("spec", "game|")
-            r = UP.call("screenshot_to_file", spec)
+            r = _unity_call("screenshot_to_file", spec)
             return f"{r.get('message', r)}"
         elif name == "unity_subscribe":
             types = args.get("types", "all")
-            r = UP.call("subscribe", types)
+            r = _unity_call("subscribe", types)
             return f"{r.get('message', r)}"
         elif name == "unity_subscribe_status":
-            r = UP.call("subscribe_status", "")
+            r = _unity_call("subscribe_status", "")
             return f"{r.get('message', r)}"
         elif name == "unity_poll_events":
             spec = args.get("spec", "500|10")
-            r = UP.call("poll_events", spec)
+            r = _unity_call("poll_events", spec)
             return f"{r.get('message', r)}"
         elif name == "unity_unsubscribe":
-            r = UP.call("unsubscribe", "")
+            r = _unity_call("unsubscribe", "")
             return f"{r.get('message', r)}"
+        elif name in ADVANCED_MESSAGES:
+            return run_advanced_tool(name, args)
         elif name in ("unity_cli", "unity_pipeline", "unity_pipeline_commands", "unity_pipeline_job"):
             return run_pipeline_tool(name, args)
         elif name == "unity_get_component":
-            r = UP.call("get_component", args["target"])
+            r = _unity_call("get_component", args["target"])
             return f"{r.get('message', r)}"
         elif name == "unity_set_property":
             r = UP.call("set_property", args["spec"])
@@ -986,7 +1257,7 @@ def handle(name: str, args: dict, close_after: bool = False) -> str:
                 return f"❌ {r.get('error', r.get('message', str(r)))}"
             return f"{r.get('message', 'ok')}"
         elif name == "unity_get_prefab_structure":
-            r = UP.call("get_prefab_structure", args["asset_path"])
+            r = _unity_call("get_prefab_structure", args["asset_path"])
             return f"{r.get('message', r)}"
         else:
             return f"未知: {name}"
@@ -1089,7 +1360,7 @@ def main(server_name: str = "yzjbridge"):
                         "id": mid,
                         "result": {
                             "protocolVersion": "2024-11-05",
-                            "serverInfo": {"name": server_name, "version": "1.0"},
+                            "serverInfo": {"name": server_name, "version": SERVER_VERSION},
                             "capabilities": {"tools": {"listChanged": False}},
                         },
                     }
@@ -1154,6 +1425,10 @@ def main(server_name: str = "yzjbridge"):
 
 
 if __name__ == "__main__":
+    # MCP stdio 始终使用 UTF-8，避免 Windows 本地代码页使中文日志解码失败。
+    for _stream in (sys.stdin, sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8")
     group = "all"
     transport = "stdio"
     port = 3100
@@ -1181,6 +1456,8 @@ if __name__ == "__main__":
         "assets": "xybridge-assets",
         "scene": "xybridge-scene",
         "events": "xybridge-events",
+        "shader": "xybridge-shader",
+        "inspect": "xybridge-inspect",
     }
     if transport != "stdio":
         print(

@@ -25,6 +25,8 @@ namespace Framework.XYEditor.Bridge
         public string message = "";
         public string error = "";
         public int processId;
+        /// <summary>客户端标识：多客户端同时连时用来区分“谁在改”。</summary>
+        public string client = "";
         /// <summary>Unity 工程根目录。多工程场景下供 MCP server 识别"这条管道属于哪个工程"。</summary>
         public string projectPath = "";
     }

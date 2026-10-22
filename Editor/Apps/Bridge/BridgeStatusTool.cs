@@ -46,7 +46,7 @@ namespace Framework.XYEditor.Bridge
             new List<BridgeSelfTest.Result>();
         private bool _showTests = true;
         private Vector2 _testScroll;
-        private string _testFilter = "all"; // all / core / assets / scene / events
+        private string _testFilter = "all"; // all / core / assets / scene / events / shader / inspect / pipeline
         private string _testFilterStatus = "all"; // all / ok / fail
         private bool _includeDestructive;
 
@@ -178,6 +178,8 @@ namespace Framework.XYEditor.Bridge
                 );
             }
 
+            EditorGUILayout.LabelField("脚本检查", BridgeSetup.ScriptStatus, BridgeStyles.MutedWrap);
+            EditorGUILayout.LabelField("运行版本", "通过 MCP unity_status 查看；更新脚本后需重新连接 MCP。", BridgeStyles.MutedWrap);
             GUILayout.Space(3);
 
             using (new EditorGUILayout.HorizontalScope())
@@ -441,6 +443,8 @@ namespace Framework.XYEditor.Bridge
                 DrawChip(ref _testFilter, "assets", "assets", 52);
                 DrawChip(ref _testFilter, "scene", "scene", 50);
                 DrawChip(ref _testFilter, "events", "events", 52);
+                DrawChip(ref _testFilter, "shader", "shader", 56);
+                DrawChip(ref _testFilter, "inspect", "inspect", 58);
                 DrawChip(ref _testFilter, "pipeline", "Pipeline", 65);
 
                 GUILayout.Space(14);

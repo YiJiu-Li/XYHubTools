@@ -41,12 +41,21 @@ XY 自有代码使用 MIT；随附 Pipeline 及第三方组件遵循各自许可
 
 ### 🤖 MCP Bridge
 - 通过 MCP 让 AI Agent 查询和操作 Unity Editor
-- 提供 28 个 `unity_*` 工具：C# 代码执行、场景/组件读写、Prefab 结构、资源管理、Console、截图、事件订阅、多工程切换
+- 提供 `unity_*` 工具：C# 代码执行、场景/组件读写、Prefab 结构、资源管理、Console、截图、事件订阅、多工程切换；实际清单和版本通过 MCP 查询
 - `unity_cli` 直接通过 HTTP 调用 `com.unity.pipeline` 的 **160 个命令**（构建、测试、烘焙、动画、Project Settings、包管理等），
   两条通道互不影响
 - 支持 Named Pipe 本地桥接
 - 支持 Codex stdio 连接
 - 支持 VS Code stdio 连接
+
+### XY Unity 智能体
+
+- 在 `XY Tools → AI → XY Unity 智能体` 或 Hub 的 AI 分类中使用。
+- 内置点位开发、问题诊断、音视频、手势、资源检查和批量验证工作流。
+- 随包提供 Shader/VFX 与 Rust/Tauri/Vue 桌面 Agent 专项技能，按任务匹配，不自动换模型。
+- 一键安装工程级 Codex Skill，生成带当前工程、场景和选中对象的任务指令。
+- 复用现有 Codex 与 XY MCP；保留分析 / 修改范围，安装更新保护本地改动并备份旧版本。
+- 见 [智能体使用说明](Agent~/README.md)；原始对话不会随插件分发。
 
 ### 🔔 Git 推送监听
 - 检测远端分支是否有新推送

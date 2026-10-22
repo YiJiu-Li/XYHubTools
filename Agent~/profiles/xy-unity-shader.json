@@ -1,0 +1,7 @@
+{
+  "id": "xy-unity-shader",
+  "name": "XY Shader 与 VFX 专项",
+  "version": "1.0.0",
+  "description": "Shader Graph、HLSL、粒子、渲染管线和 GPU 性能工作流。",
+  "files": ["SKILL.md", "agents/openai.yaml", "references/rendering.md"]
+}

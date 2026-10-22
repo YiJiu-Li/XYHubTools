@@ -14,7 +14,30 @@ namespace Framework.XYEditor.Bridge
 {
     internal static class MessageDispatcher
     {
+        /// <summary>请求入口：计时 + 记请求日志，再交给 HandleCoreAsync。</summary>
         internal static async Task<PipeEnvelope> HandleAsync(PipeEnvelope msg)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            PipeEnvelope result;
+            try { result = await HandleCoreAsync(msg); }
+            catch (Exception ex) { result = YZJBridge.Err(msg.id, ex.ToString()); }
+            sw.Stop();
+
+            try
+            {
+                RequestLog.Record(
+                    msg.type,
+                    result != null && result.ok,
+                    sw.Elapsed.TotalMilliseconds,
+                    msg.client
+                );
+            }
+            catch { /* 日志失败不能影响主流程 */ }
+
+            return result;
+        }
+
+        static async Task<PipeEnvelope> HandleCoreAsync(PipeEnvelope msg)
         {
             string reqId = msg.id;
             try
@@ -405,6 +428,47 @@ namespace Framework.XYEditor.Bridge
                         return YZJBridge.Ok(reqId, await tcs.Task);
                     }
                     // ═══════════════════════════════════════════════════
+                    //  请求统计 / 撤销
+                    case "stats":
+                        return YZJBridge.Ok(reqId, RequestLog.ToJson());
+                    case "stats_reset":
+                        RequestLog.Reset();
+                        return YZJBridge.Ok(reqId, "{\"ok\":true}");
+                    // 注意：这里刻意不提供“全局撤销 N 步”。Undo.PerformUndo() 不区分
+                    // 操作是谁做的，会连带撤掉用户自己的编辑，甚至触发整图重导入；
+                    // 实测在空组状态下还会把管线请求卡住。撤销改成两条精确路径：
+                    //   1) Shader Graph 文件快照 → unity_shadergraph op=undo
+                    //   2) Pipeline batch（transactional）自带事务撤销
+                    // ═══════════════════════════════════════════════════
+                    //  Shader Graph（op 见 ShaderGraphService）
+                    case "shadergraph":
+                    {
+                        // ShaderGraph 的 GraphData / AssetDatabase 都只能在主线程碰
+                        var tcs = new TaskCompletionSource<string>();
+                        string payload = msg.message ?? "{}";
+                        YZJBridge.PostToMainThread(() =>
+                        {
+                            try
+                            {
+                                tcs.SetResult(ShaderGraphService.Execute(payload));
+                            }
+                            catch (Exception ex)
+                            {
+                                tcs.SetException(ex);
+                            }
+                        });
+                        return YZJBridge.Ok(reqId, await tcs.Task);
+                    }
+                    // ═══════════════════════════════════════════════════
+                    //  物理查询 / 性能采样 / 资产缩略图 / 帧调试
+                    case "physics":
+                        return await RunOnMain(reqId, () => PhysicsService.Execute(msg.message));
+                    case "profiler":
+                        return await RunOnMain(reqId, () => ProfilerService.Execute(msg.message));
+                    case "asset_preview":
+                        return await RunOnMain(reqId, () => AssetPreviewService.Execute(msg.message));
+                    case "frame_debugger":
+                        return await RunOnMain(reqId, () => FrameDebuggerService.Execute(msg.message));
                     default:
                         return YZJBridge.Err(reqId, "unknown message type: " + msg.type);
                 }
@@ -413,6 +477,20 @@ namespace Framework.XYEditor.Bridge
             {
                 return YZJBridge.Err(reqId, ex.ToString());
             }
+        }
+
+        /// <summary>把同步服务丢到主线程执行，异常回传给调用方。</summary>
+        static async Task<PipeEnvelope> RunOnMain(string reqId, Func<string> fn)
+        {
+            var tcs = new TaskCompletionSource<string>();
+            YZJBridge.PostToMainThread(
+                delegate
+                {
+                    try { tcs.SetResult(fn()); }
+                    catch (Exception ex) { tcs.SetException(ex); }
+                }
+            );
+            return YZJBridge.Ok(reqId, await tcs.Task);
         }
     }
 }

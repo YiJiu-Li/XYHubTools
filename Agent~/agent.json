@@ -1,0 +1,26 @@
+{
+  "id": "xy-unity-agent",
+  "name": "XY Unity 智能体",
+  "version": "1.1.0",
+  "additionalSkills": ["xy-unity-shader", "xy-agent-desktop-dev"],
+  "description": "通过 Codex 与 XY MCP 完成 Unity 点位开发、诊断和验证。",
+  "files": [
+    "SKILL.md",
+    "agents/openai.yaml",
+    "references/modules.md",
+    "references/lifecycle-media.md",
+    "references/interaction.md",
+    "references/diagnostics-assets.md",
+    "references/tools-verification.md",
+    "references/solution-design.md",
+    "scripts/inspect_project.py"
+  ],
+  "workflows": [
+    {"id": "diagnose", "title": "问题诊断", "guidance": "根据复现步骤定位最早失败环节，检查实际源码、对象状态和日志，区分已证实原因与假设。", "example": "检查某点位第二次进入后按钮不响应的原因。"},
+    {"id": "module", "title": "点位开发", "guidance": "核对入口、PoiMgr、本地模板和模块注册，按当前工程约定设计或实现，并检查模块标识与序列化引用。", "example": "参考现有相似模块，实现指定点位的新交互。"},
+    {"id": "media", "title": "音视频流程", "guidance": "梳理资源准备、播放、UI、交互与结束依赖，检查取消、重复进入和失败路径。", "example": "让语音结束后开放注视，结束 UI 展示完再关闭点位。"},
+    {"id": "interaction", "title": "手势交互", "guidance": "沿 SDK、追踪、手数据、代理、碰撞或 UI 到业务回调检查，核对左右手和追踪恢复。", "example": "排查右手可触发、左手无法触发的问题。"},
+    {"id": "assets", "title": "资源与加载检查", "guidance": "检查 Prefab 引用、模块资源标识、DLL 或资源包版本以及实际加载配置，避免只验证本地文件。", "example": "检查点位资源引用和设备实际加载版本是否一致。"},
+    {"id": "batch", "title": "批量编辑与验证", "guidance": "先定位唯一目标并读取当前值，再进行整批预检、执行和读回断言，明确已完成操作与失败位置。", "example": "对指定对象统一修改组件参数，并逐项读回验证。"}
+  ]
+}

@@ -3,7 +3,7 @@
 //  直接调用 Bridge 后端服务（绕开 stdio 传输链路）
 //  入口：XYHub > MCP Bridge 面板
 //
-//  注：MCP 层共 25 个工具，其中 unity_list_projects / unity_use_project
+//  注：MCP 层共 34 个工具，其中 unity_list_projects / unity_use_project
 //      是纯客户端工具（只操作命名管道，不经过 Unity 管道协议），
 //      因此不在本自检范围内。
 //
@@ -14,6 +14,9 @@
 //    加：unity_subscribe / unity_poll_events / unity_screenshot_to_file
 //    恢复：unity_set_property / unity_get_prefab_structure
 //          （已接线到 MessageDispatcher 的 set_property / get_prefab_structure）
+//    加：unity_shadergraph（shader 组）
+//        unity_physics / unity_profiler / unity_asset_preview /
+//        unity_frame_debugger（inspect 组）
 //
 //  破坏性用例（Destructive=true）：会重新导入资源 / 刷新 AssetDatabase，
 //  可能触发域重载或场景刷新而打断本轮自检。默认「运行全部」跳过它们，
@@ -63,6 +66,13 @@ namespace Framework.XYEditor.Bridge
         }
 
         private static List<TestCase> _all;
+
+        /// <summary>错误详情太长时截断，避免撑爆面板/对话框。</summary>
+        private static string Clip(string s, int max = 90)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            return s.Length <= max ? s : s.Substring(0, max) + "…";
+        }
 
         /// <summary>Bridge 后端与 Pipeline HTTP 用例（不含纯客户端的多工程工具）。</summary>
         public static List<TestCase> AllCases
@@ -387,6 +397,173 @@ namespace Framework.XYEditor.Bridge
                             return r.Length > 80 ? r.Substring(0, 80) + "..." : r;
                         },
                         Hint = "读取项目里第一个 Prefab 的结构",
+                    },
+                    // ===== shader 组 =====
+                    new TestCase
+                    {
+                        Idx = 28,
+                        Name = "unity_shadergraph",
+                        Group = "shader",
+                        Run = () =>
+                        {
+                            // 建图 → 加节点 → 读节点，最后删掉整个临时目录
+                            const string dir = "Assets/_XYBridgeSelfTest";
+                            string path = dir + "/SelfTest.shadergraph";
+                            try
+                            {
+                                if (!AssetDatabase.IsValidFolder(dir))
+                                    AssetDatabase.CreateFolder("Assets", "_XYBridgeSelfTest");
+
+                                string r1 = ShaderGraphService.Execute(
+                                    "{\"op\":\"create\",\"path\":\"" + path + "\",\"template\":\"unlit\",\"overwrite\":true}");
+                                if (r1.IndexOf("\"ok\":true", StringComparison.Ordinal) < 0)
+                                    return "create: " + Clip(r1);
+
+                                string r2 = ShaderGraphService.Execute(
+                                    "{\"op\":\"add_node\",\"path\":\"" + path + "\",\"nodeType\":\"Vector1\",\"x\":120,\"y\":0}");
+                                if (r2.IndexOf("\"ok\":true", StringComparison.Ordinal) < 0)
+                                    return "add_node: " + Clip(r2);
+
+                                string r3 = ShaderGraphService.Execute(
+                                    "{\"op\":\"nodes\",\"path\":\"" + path + "\",\"withSlots\":false}");
+                                if (r3.IndexOf("\"ok\":true", StringComparison.Ordinal) < 0)
+                                    return "nodes: " + Clip(r3);
+
+                                var d = FlatJson.Parse(r3);
+                                int nodes = XyJ.Int(d, "count", -1);
+
+                                // 再验一次文件快照回滚：撤销后节点数应回到加节点之前
+                                string r4 = ShaderGraphService.Execute(
+                                    "{\"op\":\"undo\",\"path\":\"" + path + "\"}");
+                                var d4 = FlatJson.Parse(r4);
+                                bool undone = XyJ.Bool(d4, "ok", false);
+                                string r5 = ShaderGraphService.Execute(
+                                    "{\"op\":\"nodes\",\"path\":\"" + path + "\",\"withSlots\":false}");
+                                int after = XyJ.Int(FlatJson.Parse(r5), "count", -1);
+
+                                return "nodes=" + nodes + " undo=" + (undone ? "ok" : "fail") +
+                                       " after=" + after + "（已清理临时资源）";
+                            }
+                            finally
+                            {
+                                if (AssetDatabase.IsValidFolder(dir)) AssetDatabase.DeleteAsset(dir);
+                            }
+                        },
+                        Hint = "建图 / 加节点 / 列节点，用临时目录并在结束后删除",
+                    },
+                    // ===== inspect 组 =====
+                    new TestCase
+                    {
+                        Idx = 29,
+                        Name = "unity_physics",
+                        Group = "inspect",
+                        Run = () =>
+                        {
+                            // 临时立方体（顶面 y=0.5），从正上方往下打，期望 distance≈4.5
+                            var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                            try
+                            {
+                                go.name = "__XYPhysicsSelfTest__";
+                                go.transform.position = Vector3.zero;
+                                Physics.SyncTransforms();
+
+                                string r = PhysicsService.Execute(
+                                    "{\"op\":\"raycast\",\"origin\":\"0,5,0\",\"direction\":\"0,-1,0\"}");
+                                var d = FlatJson.Parse(r);
+                                bool hit = XyJ.Bool(d, "hit", false);
+                                string dist = XyJ.Str(d, "distance");
+                                return hit ? "hit dist=" + dist : "no hit";
+                            }
+                            finally
+                            {
+                                UnityEngine.Object.DestroyImmediate(go);
+                            }
+                        },
+                        Hint = "临时立方体上打射线，测完销毁",
+                    },
+                    new TestCase
+                    {
+                        Idx = 30,
+                        Name = "unity_profiler",
+                        Group = "inspect",
+                        Run = () =>
+                        {
+                            string r = ProfilerService.Execute("{\"op\":\"status\"}");
+                            if (r.IndexOf("\"ok\":true", StringComparison.Ordinal) < 0)
+                                return "status: " + Clip(r);
+                            var d = FlatJson.Parse(r);
+                            int frames = XyJ.Int(d, "frames", 0);
+                            return "enabled=" + XyJ.Bool(d, "enabled", false) +
+                                   " frames=" + frames +
+                                   " heap=" + XyJ.Str(d, "usedHeapBytes") +
+                                   (frames > 0 ? "" : "（未开始采样，属正常）");
+                        },
+                        Hint = "读采样状态与内存（不主动开启采样）",
+                    },
+                    new TestCase
+                    {
+                        Idx = 31,
+                        Name = "unity_asset_preview",
+                        Group = "inspect",
+                        Run = () =>
+                        {
+                            // 用临时 PNG 走一遍完整链路（贴图路径是同步的，不需要等异步预览）
+                            const string dir = "Assets/_XYBridgeSelfTest";
+                            string asset = dir + "/preview.png";
+                            string outPath = "";
+                            try
+                            {
+                                if (!AssetDatabase.IsValidFolder(dir))
+                                    AssetDatabase.CreateFolder("Assets", "_XYBridgeSelfTest");
+
+                                var tex = new Texture2D(16, 16, TextureFormat.RGBA32, false);
+                                try
+                                {
+                                    for (int y = 0; y < 16; y++)
+                                        for (int x = 0; x < 16; x++)
+                                            tex.SetPixel(x, y, Color.Lerp(Color.blue, Color.yellow, x / 15f));
+                                    tex.Apply();
+                                    System.IO.File.WriteAllBytes(asset, tex.EncodeToPNG());
+                                }
+                                finally { UnityEngine.Object.DestroyImmediate(tex); }
+
+                                AssetDatabase.ImportAsset(asset, ImportAssetOptions.ForceSynchronousImport);
+
+                                string r = AssetPreviewService.Execute(
+                                    "{\"op\":\"get\",\"path\":\"" + asset + "\",\"width\":64}");
+                                var d = FlatJson.Parse(r);
+                                outPath = XyJ.Str(d, "path");
+                                bool exists = !string.IsNullOrEmpty(outPath) && System.IO.File.Exists(outPath);
+                                return "kind=" + XyJ.Str(d, "kind") +
+                                       " bytes=" + XyJ.Int(d, "bytes", 0) +
+                                       " file=" + (exists ? "ok" : "missing");
+                            }
+                            finally
+                            {
+                                if (!string.IsNullOrEmpty(outPath) && System.IO.File.Exists(outPath))
+                                    System.IO.File.Delete(outPath);
+                                if (AssetDatabase.IsValidFolder(dir)) AssetDatabase.DeleteAsset(dir);
+                            }
+                        },
+                        Hint = "临时贴图 → 缩略图 PNG，测完删除",
+                    },
+                    new TestCase
+                    {
+                        Idx = 32,
+                        Name = "unity_frame_debugger",
+                        Group = "inspect",
+                        Run = () =>
+                        {
+                            // 只读状态：开启捕获会让编辑器停在某一帧，自检里不做
+                            string r = FrameDebuggerService.Execute("{\"op\":\"status\"}");
+                            if (r.IndexOf("\"ok\":true", StringComparison.Ordinal) < 0)
+                                return "status: " + Clip(r);
+                            var d = FlatJson.Parse(r);
+                            return "enabled=" + XyJ.Bool(d, "enabled", false) +
+                                   " window=" + XyJ.Bool(d, "windowOpen", false) +
+                                   " events=" + XyJ.Int(d, "eventCount", 0);
+                        },
+                        Hint = "只读：是否已启用 / 窗口是否已打开 / 已捕获多少事件",
                     },
                 };
                 _all.AddRange(PipelineSelfTest.Cases());

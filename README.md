@@ -54,6 +54,28 @@ XY 自有代码使用 MIT；随附 Pipeline 及第三方组件遵循各自许可
 - 支持 Codex stdio 连接
 - 支持 VS Code stdio 连接
 
+### 🔍 只读体检器（`unity_audit_module`）
+- **Unity 只负责采集事实，判断交给 Python 侧按 JSON 规则包求值**：加规则只改 `Agent~/rules/<pack>/rules.json`，不重编译 Unity 程序集
+- `scope: "scene"` 检查当前场景对象；`scope: "project"` 检查工程资产
+- 内置 `unity-core` 三条规则：丢失的脚本引用、重复 GUID、asmdef 引用断裂
+- 只读、不落盘、不改工程；不支持的 scope 直接报错，不会返回"半份干净结果"
+- 自己加规则：
+
+```json
+{
+  "id": "my.rule",
+  "severity": "warning",
+  "title": "一句话说清问题",
+  "scope": "object",
+  "when": [{ "fact": "missingScripts", "gt": 0 }],
+  "evidence": ["path", "missingScripts"],
+  "expected": "missingScripts == 0",
+  "fixHint": "怎么修"
+}
+```
+
+可用算子：`equals / notEquals / gt / gte / lt / lte / in / exists`，条件之间是 AND。
+
 ### XY Unity 智能体
 
 - 在 `XY Tools → AI → XY Unity 智能体` 或 Hub 的 AI 分类中使用。
@@ -216,6 +238,12 @@ Hub 会自动发现所有实例：
 欢迎提交 Issue 和 Pull Request！
 
 ## 📝 更新日志
+
+### v2.1.0 (2026-10-23)
+- 🔍 **新增只读体检器 `unity_audit_module`**：Unity 采事实、Python 按 JSON 规则包求值，加规则不用重编译
+- 📦 内置 `unity-core` 三条规则：丢失的脚本引用、重复 GUID、asmdef 引用断裂
+- 🎯 支持 `scope: scene / project`、`rulePack / rulePackPath / ruleIds` 过滤与命中数上限
+- 🧪 单测 50 → 60 项，覆盖规则求值、作用域跳过、截断告警与随包规则包格式
 
 ### v2.0.0 (2026-10-23)
 - 🔀 **Bridge 传输层改为本机 TCP**：`127.0.0.1` 随机端口 + 一次性令牌，Windows / macOS / Linux 同一套代码，取代 Windows Named Pipe

@@ -1,8 +1,8 @@
 {
     "name": "com.yzj.xyhubtools",
-    "version": "2.0.0",
+    "version": "2.1.0",
     "displayName": "XY Hub Tools",
-    "description": "Unity 编辑器工具集 + AI 操作层：本机 TCP MCP Bridge（跨平台、无第三方依赖）、工程级智能体技能，以及材质动画、模型导入、Shader Graph、场景与资源操作、批量验证等工具。",
+    "description": "Unity 编辑器工具集 + AI 操作层：本机 TCP MCP Bridge（跨平台、无第三方依赖）、数据驱动规则包的只读体检器、工程级智能体技能，以及材质动画、模型导入、Shader Graph、场景与资源操作、批量验证等工具。",
     "unity": "2022.3",
     "documentationUrl": "https://github.com/YiJiu-Li/XYHubTools#readme",
     "changelogUrl": "https://github.com/YiJiu-Li/XYHubTools/blob/main/CHANGELOG.md",

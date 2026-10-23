@@ -353,6 +353,188 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(json.loads(result)["executedSteps"], 1)
 
 
+class AuditTests(unittest.TestCase):
+    """体检器：Unity 出事实、Python 按规则包求值。用合成事实，不依赖 Unity。"""
+
+    FACTS = {
+        "ok": True,
+        "scope": "scene",
+        "scene": "TestScene",
+        "scenePath": "Assets/TestScene.unity",
+        "objectCount": 3,
+        "truncated": False,
+        "warnings": [],
+        "rulePacks": [{
+            "name": "unity-core",
+            "path": "Agent~/rules/unity-core/rules.json",
+            "json": json.dumps({
+                "pack": "unity-core",
+                "rules": [{
+                    "id": "unity.missing-script",
+                    "severity": "error",
+                    "title": "对象引用了已丢失的脚本",
+                    "scope": "object",
+                    "when": [{"fact": "missingScripts", "gt": 0}],
+                    "evidence": ["path", "missingScripts", "components.0.type"],
+                    "expected": "missingScripts == 0",
+                }],
+            }),
+        }],
+        "objects": [
+            {"path": "Root/Clean", "layer": 0, "componentCount": 2, "missingScripts": 0,
+             "components": [{"type": "UnityEngine.Transform", "missing": False, "index": 0}]},
+            {"path": "Root/Broken", "layer": 5, "componentCount": 2, "missingScripts": 1,
+             "components": [{"type": "<missing>", "missing": True, "index": 0}]},
+            {"path": "Root/AlsoBroken", "layer": 0, "componentCount": 3, "missingScripts": 2,
+             "components": [{"type": "UnityEngine.Transform", "missing": False, "index": 0}]},
+        ],
+    }
+
+    def run_audit(self, args=None, facts=None):
+        with patch.object(m.UP, "call", return_value={"ok": True, "message": json.dumps(facts or self.FACTS)}):
+            result = m.handle("unity_audit_module", args or {})
+        return json.loads(result), result
+
+    def test_missing_script_rule_fires_only_on_affected_objects(self):
+        out, result = self.run_audit()
+        self.assertFalse(result.is_error)
+        self.assertEqual(out["findingCount"], 2)
+        paths = [f["target"]["path"] for f in out["findings"]]
+        self.assertEqual(paths, ["Root/Broken", "Root/AlsoBroken"])
+        first = out["findings"][0]
+        self.assertEqual(first["ruleId"], "unity.missing-script")
+        self.assertEqual(first["severity"], "error")
+        self.assertEqual(first["evidence"]["missingScripts"], 1)
+        self.assertEqual(first["evidence"]["components.0.type"], "<missing>")
+        self.assertEqual(first["actual"], {"missingScripts": 1})
+
+    def test_rule_pack_filter_and_rule_id_filter(self):
+        out, _ = self.run_audit({"rulePack": "unity-core", "ruleIds": ["unity.missing-script"]})
+        self.assertEqual(out["rulePacks"], ["unity-core"])
+        self.assertEqual(out["rulesEvaluated"], 1)
+        out, result = self.run_audit({"rulePack": "not-exist"})
+        self.assertTrue(result.is_error)
+        self.assertIn("not-exist", json.loads(result)["error"])
+
+    def test_max_findings_truncates_and_warns(self):
+        out, _ = self.run_audit({"maxFindings": 1})
+        self.assertEqual(out["findingCount"], 1)
+        self.assertTrue(any("maxFindings" in w for w in out["warnings"]))
+
+    def test_unity_failure_is_not_reported_as_clean(self):
+        with patch.object(m.UP, "call", return_value={"ok": False, "error": "scope 不支持"}):
+            result = m.handle("unity_audit_module", {"scope": "scene"})
+        self.assertTrue(result.is_error)
+        self.assertIn("scope 不支持", str(result))
+
+    def test_project_rule_without_project_facts_is_skipped(self):
+        rule = {"id": "x.project", "scope": "project", "when": [{"fact": "objectCount", "gt": 0}]}
+        pack = [{"name": "p", "json": json.dumps({"rules": [rule]})}]
+
+        # 情形一：Unity 压根没返回 project 字段 —— 静默跳过，不刷告警
+        facts = dict(self.FACTS)
+        facts["rulePacks"] = pack
+        out, result = self.run_audit(facts=facts)
+        self.assertFalse(result.is_error)
+        self.assertEqual(out["rulesEvaluated"], 0)
+        self.assertEqual(out["warnings"], [])
+
+        # 情形二：Unity 的 JsonUtility 把空 class 序列化成了空壳对象，
+        # present=false 必须被当成「没扫过」，不能当成「扫了、很干净」
+        facts["project"] = {"present": False, "objectCount": 99, "metaCount": 0}
+        out, result = self.run_audit(facts=facts)
+        self.assertFalse(result.is_error)
+        self.assertEqual(out["rulesEvaluated"], 0)
+        self.assertEqual(out["findingCount"], 0)
+        self.assertIsNone(out["metaCount"])
+
+        # 情形三：调用方显式点名要这条规则，就必须说清楚为什么没跑
+        out, result = self.run_audit({"ruleIds": ["x.project"]}, facts=facts)
+        self.assertFalse(result.is_error)
+        self.assertTrue(any("x.project" in w and "project" in w for w in out["warnings"]))
+
+    def test_project_rule_evaluates_once_against_project_facts(self):
+        facts = dict(self.FACTS)
+        facts["scope"] = "project"
+        facts["objects"] = []
+        facts["project"] = {
+            "present": True,
+            "projectPath": "D:/Proj",
+            "metaCount": 150,
+            "duplicateGuidCount": 2,
+            "duplicateGuids": [
+                {"guid": "aaaa", "paths": ["Assets/A.mat.meta", "Assets/B.mat.meta"]},
+                {"guid": "bbbb", "paths": ["Assets/C.mat.meta", "Assets/D.mat.meta"]},
+            ],
+            "asmdefCount": 1,
+            "brokenAsmdefRefCount": 0,
+            "asmdefs": [],
+        }
+        facts["rulePacks"] = [{"name": "p", "json": json.dumps({"rules": [{
+            "id": "x.dup", "severity": "error", "title": "重复 GUID", "scope": "project",
+            "when": [{"fact": "duplicateGuidCount", "gt": 0}],
+            "evidence": ["duplicateGuidCount", "duplicateGuids.0.guid"],
+            "expected": "duplicateGuidCount == 0",
+        }]})}]
+        out, result = self.run_audit(facts=facts)
+        self.assertFalse(result.is_error)
+        self.assertEqual(out["rulesEvaluated"], 1)
+        # project 规则只出一条，不按对象数重复
+        self.assertEqual(out["findingCount"], 1)
+        finding = out["findings"][0]
+        self.assertEqual(finding["target"]["path"], "D:/Proj")
+        self.assertEqual(finding["evidence"]["duplicateGuids.0.guid"], "aaaa")
+        self.assertEqual(out["duplicateGuidCount"], 2)
+        self.assertEqual(out["metaCount"], 150)
+
+    def test_project_scope_clean_project_produces_no_findings(self):
+        # 用真正随包分发的规则包，避免"测试里自己编的规则"和线上不一致
+        shipped = (Path(m.__file__).parent.parent / "Agent~" / "rules" / "unity-core" / "rules.json")
+        facts = dict(self.FACTS)
+        facts["scope"] = "project"
+        facts["objects"] = []
+        facts["rulePacks"] = [{"name": "unity-core", "json": shipped.read_text(encoding="utf-8")}]
+        facts["project"] = {"present": True, "projectPath": "D:/Proj", "metaCount": 10,
+                            "duplicateGuidCount": 0, "duplicateGuids": [],
+                            "asmdefCount": 1, "brokenAsmdefRefCount": 0, "asmdefs": []}
+        out, result = self.run_audit(facts=facts)
+        self.assertFalse(result.is_error)
+        self.assertEqual(out["findingCount"], 0)
+        # 1 条 object 规则 + 2 条 project 规则，object 规则在空对象列表上求值也算一次
+        self.assertEqual(out["rulesEvaluated"], 3)
+        self.assertEqual(out["warnings"], [])
+
+    def test_unknown_operator_fails_loudly(self):
+        facts = dict(self.FACTS)
+        facts["rulePacks"] = [{"name": "p", "json": json.dumps({"rules": [
+            {"id": "x.bad", "when": [{"fact": "layer", "roughly": 0}]}]})}]
+        with patch.object(m.UP, "call", return_value={"ok": True, "message": json.dumps(facts)}):
+            result = m.handle("unity_audit_module", {})
+        self.assertTrue(result.is_error)
+        self.assertIn("算子", str(result))
+
+    def test_operators_and_missing_fact(self):
+        obj = {"layer": 5, "tag": "Player", "nested": {"v": 2}}
+        self.assertTrue(m._rule_match({"when": [{"fact": "layer", "gte": 5}]}, obj)[0])
+        self.assertFalse(m._rule_match({"when": [{"fact": "layer", "lt": 5}]}, obj)[0])
+        self.assertTrue(m._rule_match({"when": [{"fact": "tag", "in": ["Player", "Enemy"]}]}, obj)[0])
+        self.assertTrue(m._rule_match({"when": [{"fact": "nested.v", "equals": 2}]}, obj)[0])
+        # 事实缺失应当不命中，而不是抛异常或误命中
+        self.assertFalse(m._rule_match({"when": [{"fact": "nope.deep", "equals": 1}]}, obj)[0])
+
+    def test_shipped_rule_pack_is_valid_json_with_required_fields(self):
+        path = Path(m.__file__).parent.parent / "Agent~" / "rules" / "unity-core" / "rules.json"
+        body = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(body["pack"], "unity-core")
+        for rule in body["rules"]:
+            for key in ("id", "severity", "title", "when", "expected", "fixHint"):
+                self.assertIn(key, rule, rule.get("id"))
+            for condition in rule["when"]:
+                ops = [k for k in condition if k != "fact"]
+                self.assertEqual(len(ops), 1, rule["id"])
+                self.assertIn(ops[0], m.AUDIT_OPS, rule["id"])
+
+
 class NoLegacyApiTests(unittest.TestCase):
     """防止 2.0 迁移留下死引用：管道时代的符号不应再被任何代码路径调用。"""
 

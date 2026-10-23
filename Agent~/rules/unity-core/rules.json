@@ -1,0 +1,44 @@
+{
+  "pack": "unity-core",
+  "version": "0.2.0",
+  "title": "通用 Unity 工程体检",
+  "description": "与具体业务无关的规则。判定条件是数据，新增规则不需要重编译 Unity 程序集。",
+  "rules": [
+    {
+      "id": "unity.missing-script",
+      "severity": "error",
+      "title": "对象引用了已丢失的脚本",
+      "scope": "object",
+      "when": [
+        { "fact": "missingScripts", "gt": 0 }
+      ],
+      "evidence": ["path", "missingScripts", "componentCount", "active"],
+      "expected": "missingScripts == 0",
+      "fixHint": "找到对应脚本文件并恢复（GUID 未变时引用会自动接上），或删除该组件。若脚本已弃用，用 Unity 的「Remove Missing Scripts」清理。"
+    },
+    {
+      "id": "unity.duplicate-guid",
+      "severity": "error",
+      "title": "两个资源共用了同一个 GUID",
+      "scope": "project",
+      "when": [
+        { "fact": "duplicateGuidCount", "gt": 0 }
+      ],
+      "evidence": ["duplicateGuidCount", "duplicateGuids.0.guid", "duplicateGuids.0.paths"],
+      "expected": "duplicateGuidCount == 0",
+      "fixHint": "重复 GUID 通常来自拷贝 .meta 或从别处整目录拖入资源。Unity 只会认其中一个，另一个的引用会在重新导入后错乱，而且不报错。修法：删掉其中一个 .meta 让 Unity 重新生成 GUID，再把引用它的地方重新指过去。"
+    },
+    {
+      "id": "unity.asmdef-broken-ref",
+      "severity": "error",
+      "title": "asmdef 引用了不存在的程序集",
+      "scope": "project",
+      "when": [
+        { "fact": "brokenAsmdefRefCount", "gt": 0 }
+      ],
+      "evidence": ["brokenAsmdefRefCount", "asmdefs.0.name", "asmdefs.0.brokenReferences"],
+      "expected": "brokenAsmdefRefCount == 0",
+      "fixHint": "引用里的 GUID:xxx 指向的程序集已不存在（常见于删掉或改名了被引用的 asmdef），或写错了程序集名。改成正确的程序集名，或删掉这条引用。"
+    }
+  ]
+}

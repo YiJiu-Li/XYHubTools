@@ -5,6 +5,29 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.1.0] - 2026-10-23
+
+### 新增
+- 新增只读体检器 `unity_audit_module`：**Unity 只负责采集事实，判断由 Python 侧按 JSON 规则包求值**。加规则只改 `Agent~/rules/<pack>/rules.json`，不需要重编译 Unity 程序集。
+- 两个作用域：`scope=scene` 采集当前场景的对象树与组件；`scope=project` 采集工程资产事实（GUID 重复、asmdef 引用断裂）。
+- 新增 `Agent~/rules/unity-core/rules.json`，内置三条规则：
+  - `unity.missing-script` — 对象引用了已丢失的脚本
+  - `unity.duplicate-guid` — 两个资源共用同一个 GUID（Unity 自己不会报，只会静默认其中一个）
+  - `unity.asmdef-broken-ref` — asmdef 引用了不存在的程序集
+- 条件算子：`equals / notEquals / gt / gte / lt / lte / in / exists`，条件之间是 AND；事实用点路径取值，数组可用下标（`duplicateGuids.0.guid`），与 `unity_batch` 的 `expect.path` 同一套写法。
+- 支持 `rulePack` / `rulePackPath` / `ruleIds` / `maxObjects` / `maxFindings` 过滤，命中过多会截断并给出告警。
+
+### 设计约束（写进代码注释，别改）
+- 事实采集层**只记录看到什么，不判断对错**：不写 severity、不拼错误文案，判断全在规则包里。
+- 失败不返回半份数据：不支持的 scope 直接抛错，避免被误读成「工程很干净」。
+- `project` 事实带 `present` 标记 —— Unity 的 `JsonUtility` 无法把 class 字段序列化成 null，只会给空壳对象，靠这个标记区分「真的扫过」和「没扫」。
+- 作用域不匹配的规则**静默跳过**（跑 scene 体检时 project 规则本就不适用）；只有调用方用 `ruleIds` 显式点名时才提示，避免每次体检都刷告警。
+
+### 验证
+- `MCP~` 单测从 50 项扩到 60 项，新增体检器用例：缺失脚本按对象命中、project 规则只出一条不按对象重复、干净工程零发现、作用域不匹配静默跳过、显式点名才告警、未知算子报错、随包规则包格式校验。
+- Unity 2022.3.53f1 实机：`scope=scene` 返回 SampleScene 2 个对象；`scope=project` 扫描 150 个 meta / 2 个 asmdef，干净工程 `findingCount=0` 且无告警。
+- 受控验证：临时复制一份 `.meta` 造出重复 GUID，`unity.duplicate-guid` 命中，evidence 正确列出两条冲突路径；清理后回到 0。
+
 ## [2.0.0] - 2026-10-23
 
 ### 变更（不兼容）

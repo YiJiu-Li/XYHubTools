@@ -1140,6 +1140,19 @@ ALL_TOOLS.append({
         }}
     }, "required": ["steps"]}
 })
+ALL_TOOLS.append({
+    "name": "unity_audit_module",
+    "description": "只读体检：Unity 采集事实，按规则包（Agent~/rules/<pack>/rules.json）求值并返回结构化发现。不改工程、不落盘。规则是数据，新增规则无需重编译 Unity。scope=scene 检查当前场景对象；scope=project 检查工程资产（GUID 重复、asmdef 引用断裂）。",
+    "inputSchema": {"type": "object", "additionalProperties": False, "properties": {
+        "scope": {"type": "string", "enum": ["scene", "project"], "default": "scene"},
+        "rulePack": {"type": "string", "description": "只跑某个规则包，如 unity-core"},
+        "rulePackPath": {"type": "string", "description": "额外加载一个 rules.json（本地试验用）"},
+        "ruleIds": {"type": "array", "items": {"type": "string"}, "maxItems": 50,
+                    "description": "只跑指定规则 id"},
+        "maxObjects": {"type": "integer", "minimum": 1, "maximum": 20000, "default": 2000},
+        "maxFindings": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 200}
+    }}
+})
 
 
 def validate_arguments(value, schema, path="arguments"):
@@ -1225,6 +1238,176 @@ def run_batch(args):
                        "totalSteps": len(args["steps"]), "results": results}, ensure_ascii=False)
 
 
+# ═══════════════ 体检器：Unity 采事实，这里按规则包求值 ═══════════════
+#  分工刻意如此：Unity 侧（AuditService）只返回「看到什么」，不返回「哪里错了」。
+#  规则是数据（Agent~/rules/<pack>/rules.json），加规则不用重编译 Unity 程序集。
+
+AUDIT_OPS = {
+    "equals": lambda a, b: json_equal(a, b),
+    "notEquals": lambda a, b: not json_equal(a, b),
+    "gt": lambda a, b: type(a) in (int, float) and a > b,
+    "gte": lambda a, b: type(a) in (int, float) and a >= b,
+    "lt": lambda a, b: type(a) in (int, float) and a < b,
+    "lte": lambda a, b: type(a) in (int, float) and a <= b,
+    "in": lambda a, b: a in b,
+    "exists": lambda a, b: (a is not None) == bool(b),
+}
+
+
+def _fact_get(obj, path):
+    """按点路径取值，数组用下标（与 unity_batch 的 expect.path 同一套写法）。"""
+    value = obj
+    for segment in (path.split(".") if path else []):
+        value = value[int(segment)] if isinstance(value, list) else value[segment]
+    return value
+
+
+def _rule_match(rule, obj):
+    """返回 (是否命中, 命中的事实值)。规则条件之间是 AND。"""
+    actual = {}
+    for condition in rule.get("when") or []:
+        fact = condition.get("fact", "")
+        try:
+            value = _fact_get(obj, fact)
+        except (KeyError, IndexError, TypeError):
+            return False, None
+        op = next((k for k in condition if k != "fact"), None)
+        if op not in AUDIT_OPS:
+            raise ValueError("规则 %s 的条件算子无法识别: %s" % (rule.get("id"), op))
+        if not AUDIT_OPS[op](value, condition[op]):
+            return False, None
+        actual[fact] = value
+    return True, actual
+
+
+def _load_rule_packs(facts, args, warnings):
+    packs = list(facts.get("rulePacks") or [])
+    extra = args.get("rulePackPath")
+    if extra:
+        try:
+            with open(extra, encoding="utf-8") as stream:
+                packs.append({"name": os.path.basename(os.path.dirname(extra)) or "custom",
+                              "path": extra, "json": stream.read()})
+        except OSError as e:
+            warnings.append("读取 rulePackPath 失败: %s" % e)
+
+    wanted = args.get("rulePack")
+    if wanted:
+        packs = [p for p in packs if p.get("name") == wanted]
+        if not packs:
+            raise ValueError("没有名为 %s 的规则包" % wanted)
+    return packs
+
+
+def run_audit(args):
+    """只读体检：不改工程、不落盘，失败也不影响 Unity 状态。"""
+    scope = args.get("scope") or "scene"
+    payload = {"scope": scope}
+    if args.get("maxObjects"):
+        payload["maxObjects"] = int(args["maxObjects"])
+
+    response = UP.call("audit_module", json.dumps(payload, ensure_ascii=False), timeout_s=120.0)
+    if not response.get("ok"):
+        return PipelineToolResult(json.dumps(
+            {"ok": False, "error": response.get("error") or response.get("message") or "体检请求失败"},
+            ensure_ascii=False), True)
+    text = response.get("message") or ""
+    try:
+        facts = json.loads(text)
+    except ValueError as e:
+        return PipelineToolResult(json.dumps({"ok": False, "error": "Unity 返回的体检事实不是合法 JSON: %s" % e}, ensure_ascii=False), True)
+
+    warnings = list(facts.get("warnings") or [])
+    try:
+        packs = _load_rule_packs(facts, args, warnings)
+    except ValueError as e:
+        return PipelineToolResult(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False), True)
+    only = set(args.get("ruleIds") or [])
+    max_findings = int(args.get("maxFindings") or 200)
+
+    findings, evaluated, truncated = [], 0, False
+    for pack in packs:
+        try:
+            body = json.loads(pack["json"])
+        except (ValueError, KeyError) as e:
+            warnings.append("规则包 %s 解析失败: %s" % (pack.get("name"), e))
+            continue
+        for rule in body.get("rules") or []:
+            if only and rule.get("id") not in only:
+                continue
+            rule_scope = rule.get("scope", "object")
+            if rule_scope == "object":
+                targets = facts.get("objects") or []
+            elif rule_scope == "project":
+                project = facts.get("project")
+                # Unity 侧用 present 标记是否真的扫过工程；没扫过就别拿空对象求值。
+                # 作用域不匹配属于正常情况（跑 scene 体检时 project 规则本就不适用），
+                # 所以只有调用方显式点名要这条规则时才提示，否则静默跳过，避免噪音。
+                if not project or not project.get("present"):
+                    if rule.get("id") in only:
+                        warnings.append("规则 %s 需要 project 事实，但本次 scope=%s"
+                                        % (rule.get("id"), facts.get("scope")))
+                    continue
+                # project 级规则只求值一次，命中就一条 finding
+                targets = [project]
+            else:
+                if rule.get("id") in only:
+                    warnings.append("规则 %s 的 scope=%s 暂不支持" % (rule.get("id"), rule_scope))
+                continue
+            evaluated += 1
+            for obj in targets:
+                hit, actual = _rule_match(rule, obj)
+                if not hit:
+                    continue
+                if len(findings) >= max_findings:
+                    if not truncated:
+                        truncated = True
+                        warnings.append("命中数超过 maxFindings=%d，结果被截断" % max_findings)
+                    break
+                evidence = {}
+                for key in rule.get("evidence") or []:
+                    try:
+                        evidence[key] = _fact_get(obj, key)
+                    except (KeyError, IndexError, TypeError):
+                        evidence[key] = None
+                findings.append({
+                    "ruleId": rule.get("id"),
+                    "severity": rule.get("severity", "warning"),
+                    "title": rule.get("title", ""),
+                    "pack": pack.get("name"),
+                    "target": {"path": obj.get("path") or obj.get("projectPath") or "project"},
+                    "evidence": evidence,
+                    "expected": rule.get("expected"),
+                    "actual": actual,
+                    "fixHint": rule.get("fixHint"),
+                })
+            if len(findings) >= max_findings:
+                break
+
+    project = facts.get("project") or {}
+    if not project.get("present"):
+        project = {}  # 没扫过工程就别把 Unity 给的空壳当成"扫了、很干净"
+    return tool_result(json.dumps({
+        "ok": True,
+        "scope": facts.get("scope"),
+        "scene": facts.get("scene"),
+        "scenePath": facts.get("scenePath"),
+        "isPlaying": facts.get("isPlaying"),
+        "projectPath": project.get("projectPath"),
+        "metaCount": project.get("metaCount"),
+        "duplicateGuidCount": project.get("duplicateGuidCount"),
+        "asmdefCount": project.get("asmdefCount"),
+        "brokenAsmdefRefCount": project.get("brokenAsmdefRefCount"),
+        "objectCount": facts.get("objectCount"),
+        "truncated": facts.get("truncated"),
+        "rulePacks": [p.get("name") for p in packs],
+        "rulesEvaluated": evaluated,
+        "findingCount": len(findings),
+        "findings": findings,
+        "warnings": warnings,
+    }, ensure_ascii=False))
+
+
 # ═══════════════ 工具分组（保留给 stdio 按需裁剪工具列表）═══════════════
 TOOL_GROUPS = {
     "core": [  # 基础通讯 & 多工程
@@ -1249,6 +1432,7 @@ TOOL_GROUPS = {
     ],
     "scene": [  # 场景 & 运行时，以及批量编辑验证
         "unity_batch",
+        "unity_audit_module",
         "unity_execute_code",
         "unity_get_selection",
         "unity_get_scene_graph",
@@ -1312,6 +1496,8 @@ def _handle_impl(name: str, args: dict, close_after: bool = False) -> str:
     try:
         if name == "unity_batch":
             return run_batch(args)
+        if name == "unity_audit_module":
+            return run_audit(args)
         if name == "unity_list_projects":
             return cmd_list_projects()
         elif name == "unity_use_project":

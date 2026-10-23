@@ -285,6 +285,23 @@ namespace Framework.XYEditor.Bridge
                         });
                         return YZJBridge.Ok(reqId, await tcs.Task);
                     }
+                    case "audit_module":
+                    {
+                        // 只采事实，判断在 MCP 侧按规则包做（见 AuditService 头部说明）
+                        var tcs = new TaskCompletionSource<string>();
+                        YZJBridge.PostToMainThread(() =>
+                        {
+                            try
+                            {
+                                tcs.SetResult(AuditService.CollectFacts(msg.message));
+                            }
+                            catch (Exception ex)
+                            {
+                                tcs.SetException(ex);
+                            }
+                        });
+                        return YZJBridge.Ok(reqId, await tcs.Task);
+                    }
                     case "play_mode":
                     {
                         // 只读：报告当前 play mode 状态，禁用 enter/exit（会触发域重载、卡 Bridge）

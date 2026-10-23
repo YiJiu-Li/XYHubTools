@@ -15,6 +15,25 @@ namespace XY.PipelineBootstrap
     {
         private const string PackageName = "com.unity.pipeline";
         private const string AttemptKey = "XY.PipelineBootstrap.Attempted";
+
+        /// <summary>
+        /// 按包名查 PackageInfo。
+        /// 不能用 PackageInfo.FindForPackageName —— 那是 Unity 2022.2 才加的 API，
+        /// 2021.3 上没有（CS0117）。GetAllRegisteredPackages 从 2020.1 就有，
+        /// 两个版本都能跑。
+        /// </summary>
+        private static UnityEditor.PackageManager.PackageInfo FindPackage(string name)
+        {
+            // 全限定：UnityEditor 里也有个 PackageInfo，直接写 PackageInfo 会 CS0104 撞名
+            var packages = UnityEditor.PackageManager.PackageInfo.GetAllRegisteredPackages();
+            for (int i = 0; i < packages.Length; i++)
+            {
+                if (packages[i] != null && packages[i].name == name)
+                    return packages[i];
+            }
+            return null;
+        }
+
         private static ListRequest listRequest;
         private static AddRequest addRequest;
         [Serializable] private class Bundle { public string name, version, unity, sha256, upstreamVersion, upstreamUnity; }
@@ -41,7 +60,7 @@ namespace XY.PipelineBootstrap
         private static void Check()
         {
             if (AssetDatabase.IsAssetImportWorkerProcess()) return;
-            var existing = UnityEditor.PackageManager.PackageInfo.FindForPackageName(PackageName);
+            var existing = FindPackage(PackageName);
             if (existing != null)
             {
                 DescribeInstalled(existing);
@@ -102,7 +121,7 @@ namespace XY.PipelineBootstrap
 
         private static string BundleRoot()
         {
-            var xy = UnityEditor.PackageManager.PackageInfo.FindForPackageName("com.yzj.xyhubtools");
+            var xy = FindPackage("com.yzj.xyhubtools");
             return Path.Combine(xy != null ? xy.resolvedPath : Path.Combine(Application.dataPath, "XYHubTools"), "Pipeline~");
         }
 
@@ -190,7 +209,7 @@ namespace XY.PipelineBootstrap
         {
             // Unity's virtual package filesystem can make cached packages appear here too.
             // Use UPM's source identity, not Directory.Exists, to distinguish embedded source.
-            var package = UnityEditor.PackageManager.PackageInfo.FindForPackageName(PackageName);
+            var package = FindPackage(PackageName);
             if (package != null && package.source == PackageSource.Embedded)
                 throw new InvalidOperationException("当前为嵌入式 Pipeline 源码包。请先备份并迁出 Packages/com.unity.pipeline，再通过 UPM 安装；不会自动删除源码");
         }

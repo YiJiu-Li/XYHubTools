@@ -29,6 +29,10 @@
 - 悬空引用扫描跳过 Unity 内置 GUID（前 16 位全 0，如 `0000000000000000f000000000000000`），否则全是误报。
 - 扫描有 64MB 字节上限，超了给告警而不是悄悄少扫。
 
+### 修复
+- `PackageInfo.FindForPackageName` 是 Unity 2022.2 才加的 API，2021.3 上没有，导致整包在 2021.3 下编译失败（`CS0117`）。全部 6 处调用改为两个版本都支持的写法：找自己所在的包用 `FindForAssembly`，按包名找别的包用 `GetAllRegisteredPackages` 遍历。涉及 `BridgeSetup`、`XYUnityAgentService`、`PipelineInstaller`。
+- `PackageInfo` 在 `UnityEditor` 与 `UnityEditor.PackageManager` 下各有一个，直接写短名会 `CS0104` 撞名，改为全限定。
+
 ### 验证
 - `MCP~` 单测从 50 项扩到 66 项：缺失脚本按对象命中、重复 GUID、悬空引用的文件/行号/字段名、内置 GUID 不误报、asmdef 断裂、project 规则只出一条不按对象重复、同名规则包去重、工程路径缺失/非 Unity 目录的报错、未知算子报错、随包规则包格式校验。
 - Unity 2022.3.53f1 编译干净；scene 作用域实机返回 SampleScene 2 个对象。

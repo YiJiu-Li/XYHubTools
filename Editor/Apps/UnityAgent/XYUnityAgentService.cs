@@ -86,7 +86,10 @@ namespace Framework.XYEditor.Agent
         {
             get
             {
-                var package = UnityEditor.PackageManager.PackageInfo.FindForPackageName("com.yzj.xyhubtools");
+                // 不能用 FindForPackageName：Unity 2021.3 没有这个 API（2022.2 才加）
+                var package = UnityEditor.PackageManager.PackageInfo.FindForAssembly(
+                    typeof(XYUnityAgentService).Assembly
+                );
                 return Path.Combine(package != null && !string.IsNullOrEmpty(package.resolvedPath)
                     ? package.resolvedPath : Path.Combine(Application.dataPath, "XYHubTools"), "Agent~");
             }

@@ -41,8 +41,11 @@ namespace Framework.XYEditor.Bridge
         {
             get
             {
-                var info = UnityEditor.PackageManager.PackageInfo.FindForPackageName(
-                    "com.yzj.xyhubtools"
+                // 找自己所在的包用 FindForAssembly：Unity 2021.3 没有
+                // PackageInfo.FindForPackageName（2022.2 才加），会 CS0117。
+                // 包嵌在 Assets 下时返回 null，由调用方回退到 dataPath。
+                var info = UnityEditor.PackageManager.PackageInfo.FindForAssembly(
+                    typeof(BridgeSetup).Assembly
                 );
                 if (info != null && !string.IsNullOrEmpty(info.resolvedPath))
                 {
@@ -61,8 +64,8 @@ namespace Framework.XYEditor.Bridge
         {
             get
             {
-                var info = UnityEditor.PackageManager.PackageInfo.FindForPackageName(
-                    "com.yzj.xyhubtools"
+                var info = UnityEditor.PackageManager.PackageInfo.FindForAssembly(
+                    typeof(BridgeSetup).Assembly
                 );
                 if (info != null && !string.IsNullOrEmpty(info.resolvedPath))
                 {

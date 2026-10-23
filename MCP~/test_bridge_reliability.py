@@ -453,56 +453,6 @@ class AuditTests(unittest.TestCase):
         self.assertFalse(result.is_error)
         self.assertTrue(any("x.project" in w and "project" in w for w in out["warnings"]))
 
-    def test_project_rule_evaluates_once_against_project_facts(self):
-        facts = dict(self.FACTS)
-        facts["scope"] = "project"
-        facts["objects"] = []
-        facts["project"] = {
-            "present": True,
-            "projectPath": "D:/Proj",
-            "metaCount": 150,
-            "duplicateGuidCount": 2,
-            "duplicateGuids": [
-                {"guid": "aaaa", "paths": ["Assets/A.mat.meta", "Assets/B.mat.meta"]},
-                {"guid": "bbbb", "paths": ["Assets/C.mat.meta", "Assets/D.mat.meta"]},
-            ],
-            "asmdefCount": 1,
-            "brokenAsmdefRefCount": 0,
-            "asmdefs": [],
-        }
-        facts["rulePacks"] = [{"name": "p", "json": json.dumps({"rules": [{
-            "id": "x.dup", "severity": "error", "title": "重复 GUID", "scope": "project",
-            "when": [{"fact": "duplicateGuidCount", "gt": 0}],
-            "evidence": ["duplicateGuidCount", "duplicateGuids.0.guid"],
-            "expected": "duplicateGuidCount == 0",
-        }]})}]
-        out, result = self.run_audit(facts=facts)
-        self.assertFalse(result.is_error)
-        self.assertEqual(out["rulesEvaluated"], 1)
-        # project 规则只出一条，不按对象数重复
-        self.assertEqual(out["findingCount"], 1)
-        finding = out["findings"][0]
-        self.assertEqual(finding["target"]["path"], "D:/Proj")
-        self.assertEqual(finding["evidence"]["duplicateGuids.0.guid"], "aaaa")
-        self.assertEqual(out["duplicateGuidCount"], 2)
-        self.assertEqual(out["metaCount"], 150)
-
-    def test_project_scope_clean_project_produces_no_findings(self):
-        # 用真正随包分发的规则包，避免"测试里自己编的规则"和线上不一致
-        shipped = (Path(m.__file__).parent.parent / "Agent~" / "rules" / "unity-core" / "rules.json")
-        facts = dict(self.FACTS)
-        facts["scope"] = "project"
-        facts["objects"] = []
-        facts["rulePacks"] = [{"name": "unity-core", "json": shipped.read_text(encoding="utf-8")}]
-        facts["project"] = {"present": True, "projectPath": "D:/Proj", "metaCount": 10,
-                            "duplicateGuidCount": 0, "duplicateGuids": [],
-                            "asmdefCount": 1, "brokenAsmdefRefCount": 0, "asmdefs": []}
-        out, result = self.run_audit(facts=facts)
-        self.assertFalse(result.is_error)
-        self.assertEqual(out["findingCount"], 0)
-        # 1 条 object 规则 + 2 条 project 规则，object 规则在空对象列表上求值也算一次
-        self.assertEqual(out["rulesEvaluated"], 3)
-        self.assertEqual(out["warnings"], [])
 
     def test_unknown_operator_fails_loudly(self):
         facts = dict(self.FACTS)
@@ -533,6 +483,108 @@ class AuditTests(unittest.TestCase):
                 ops = [k for k in condition if k != "fact"]
                 self.assertEqual(len(ops), 1, rule["id"])
                 self.assertIn(ops[0], m.AUDIT_OPS, rule["id"])
+
+
+class ProjectAuditTests(unittest.TestCase):
+    """project 作用域走本地文件扫描，不碰 Unity。用临时目录搭一个迷你工程。"""
+
+    SHIPPED = Path(m.__file__).parent.parent / "Agent~" / "rules" / "unity-core" / "rules.json"
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="xyaudit-")
+        self.addCleanup(shutil.rmtree, self.root, True)
+        os.makedirs(os.path.join(self.root, "Assets"), exist_ok=True)
+
+    def write(self, rel, text):
+        path = os.path.join(self.root, rel.replace("/", os.sep))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as stream:
+            stream.write(text)
+        return path
+
+    def meta(self, rel, guid):
+        self.write(rel + ".meta", "fileFormatVersion: 2\nguid: %s\n" % guid)
+
+    def audit(self, **kwargs):
+        args = {"scope": "project", "projectPath": self.root,
+                "rulePackPath": str(self.SHIPPED)}
+        args.update(kwargs)
+        result = m.handle("unity_audit_module", args)
+        return json.loads(result), result
+
+    def test_clean_project_reports_no_findings(self):
+        self.meta("Assets/A.mat", "1" * 32)
+        out, result = self.audit()
+        self.assertFalse(result.is_error)
+        self.assertEqual(out["findingCount"], 0)
+        self.assertEqual(out["metaCount"], 1)
+        self.assertEqual(out["warnings"], [])
+        # 1 条 object 规则 + 3 条 project 规则
+        self.assertEqual(out["rulesEvaluated"], 4)
+
+    def test_duplicate_guid_is_detected(self):
+        self.meta("Assets/A.mat", "a" * 32)
+        self.meta("Assets/B.mat", "a" * 32)
+        out, _ = self.audit()
+        self.assertEqual(out["duplicateGuidCount"], 1)
+        self.assertEqual([f["ruleId"] for f in out["findings"]], ["unity.duplicate-guid"])
+        self.assertEqual(sorted(out["findings"][0]["evidence"]["duplicateGuids.0.paths"]),
+                         ["Assets/A.mat.meta", "Assets/B.mat.meta"])
+
+    def test_dangling_reference_reports_file_line_and_key(self):
+        self.meta("Assets/Scenes/S.unity", "2" * 32)
+        self.write("Assets/Scenes/S.unity",
+                   "--- !u!29 &1\nLightingSettings:\n"
+                   "  m_LightingSettings: {fileID: 4890085278179872738, guid: %s,\n    type: 2}\n"
+                   % ("9" * 32))
+        out, _ = self.audit()
+        self.assertEqual(out["danglingRefCount"], 1)
+        finding = [f for f in out["findings"] if f["ruleId"] == "unity.dangling-reference"][0]
+        self.assertEqual(finding["evidence"]["danglingRefs.0.guid"], "9" * 32)
+        ref = finding["evidence"]["danglingRefs.0.refs"][0]
+        self.assertEqual(ref["file"], "Assets/Scenes/S.unity")
+        self.assertEqual(ref["line"], 3)
+        self.assertEqual(ref["key"], "m_LightingSettings")
+
+    def test_unity_builtin_guid_is_not_dangling(self):
+        # Unity 内置资源（default resources / builtin extra）GUID 前 16 位全 0
+        self.write("Assets/M.mat",
+                   "Material:\n  m_Shader: {fileID: 46, guid: %s, type: 3}\n"
+                   % "0000000000000000f000000000000000")
+        out, _ = self.audit()
+        self.assertEqual(out["danglingRefCount"], 0)
+        self.assertEqual(out["findingCount"], 0)
+
+    def test_broken_asmdef_reference_is_detected(self):
+        self.write("Assets/Editor/A.asmdef", json.dumps(
+            {"name": "A", "references": ["Missing.Asm", "GUID:" + "f" * 32]}))
+        self.write("Assets/Editor/B.asmdef", json.dumps(
+            {"name": "B", "references": ["A"]}))
+        out, _ = self.audit()
+        self.assertEqual(out["asmdefCount"], 2)
+        self.assertEqual(out["brokenAsmdefRefCount"], 2)
+        self.assertEqual([f["ruleId"] for f in out["findings"]], ["unity.asmdef-broken-ref"])
+
+    def test_missing_project_path_reports_clear_error(self):
+        with patch.object(m, "bound_project_path", side_effect=RuntimeError("no unity")):
+            result = m.handle("unity_audit_module", {"scope": "project"})
+        self.assertTrue(result.is_error)
+        self.assertIn("projectPath", str(result))
+
+    def test_non_unity_directory_reports_clear_error(self):
+        bogus = os.path.join(self.root, "not-a-project")
+        os.makedirs(bogus)
+        out, result = self.audit(projectPath=bogus)
+        self.assertTrue(result.is_error)
+        self.assertIn("Assets", out["error"])
+
+    def test_same_pack_name_is_evaluated_once(self):
+        # rulePackPath 与安装目录里可能都有 unity-core，不能各跑一遍
+        self.meta("Assets/A.mat", "a" * 32)
+        self.meta("Assets/B.mat", "a" * 32)
+        out, _ = self.audit()
+        self.assertEqual(out["rulePacks"].count("unity-core"), 1)
+        self.assertEqual(out["findingCount"], 1)
 
 
 class NoLegacyApiTests(unittest.TestCase):

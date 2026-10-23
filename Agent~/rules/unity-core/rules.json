@@ -1,6 +1,6 @@
 {
   "pack": "unity-core",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "title": "通用 Unity 工程体检",
   "description": "与具体业务无关的规则。判定条件是数据，新增规则不需要重编译 Unity 程序集。",
   "rules": [
@@ -39,6 +39,18 @@
       "evidence": ["brokenAsmdefRefCount", "asmdefs.0.name", "asmdefs.0.brokenReferences"],
       "expected": "brokenAsmdefRefCount == 0",
       "fixHint": "引用里的 GUID:xxx 指向的程序集已不存在（常见于删掉或改名了被引用的 asmdef），或写错了程序集名。改成正确的程序集名，或删掉这条引用。"
+    },
+    {
+      "id": "unity.dangling-reference",
+      "severity": "error",
+      "title": "资产引用了工程里已不存在的资源",
+      "scope": "project",
+      "when": [
+        { "fact": "danglingRefCount", "gt": 0 }
+      ],
+      "evidence": ["danglingRefCount", "danglingRefs.0.guid", "danglingRefs.0.refs"],
+      "expected": "danglingRefCount == 0",
+      "fixHint": "被引用的资产已删除，但引用还写在文件里。Unity 不会报错，只在检视面板显示 None，于是设置静默回退默认值。典型：场景的 m_LightingSettings 指向已删的 Lighting Settings，之前调的光照参数全丢。修法：要么把资产找回来（从版本库恢复同名 .meta 即可接上），要么在对应面板重新指定或清空该引用。"
     }
   ]
 }

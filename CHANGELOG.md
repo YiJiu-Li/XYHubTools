@@ -8,25 +8,33 @@
 ## [2.1.0] - 2026-10-23
 
 ### 新增
-- 新增只读体检器 `unity_audit_module`：**Unity 只负责采集事实，判断由 Python 侧按 JSON 规则包求值**。加规则只改 `Agent~/rules/<pack>/rules.json`，不需要重编译 Unity 程序集。
-- 两个作用域：`scope=scene` 采集当前场景的对象树与组件；`scope=project` 采集工程资产事实（GUID 重复、asmdef 引用断裂）。
-- 新增 `Agent~/rules/unity-core/rules.json`，内置三条规则：
-  - `unity.missing-script` — 对象引用了已丢失的脚本
+- 新增只读体检器 `unity_audit_module`：**Unity 只负责采集场景事实，判断由 Python 侧按 JSON 规则包求值**。加规则只改 `Agent~/rules/<pack>/rules.json`，不需要重编译 Unity 程序集。
+- 两个作用域，代价不同：
+  - `scope=scene` —— 当前场景的对象树与组件，**需要 Unity 开着**（运行时状态只能问编辑器）。
+  - `scope=project` —— 工程资产事实，**直接读文件，不需要 Unity**（CI 里也能跑）。支持 `projectPath` 指定工程，不填则用当前绑定的 Unity 工程。
+- 新增 `Agent~/rules/unity-core/rules.json`，内置四条规则：
+  - `unity.missing-script` — 对象引用了已丢失的脚本（scene）
   - `unity.duplicate-guid` — 两个资源共用同一个 GUID（Unity 自己不会报，只会静默认其中一个）
   - `unity.asmdef-broken-ref` — asmdef 引用了不存在的程序集
+  - `unity.dangling-reference` — 资产引用了工程里已不存在的资源（**Unity 不报错，只在检视面板显示 None，设置静默回退默认值**）
 - 条件算子：`equals / notEquals / gt / gte / lt / lte / in / exists`，条件之间是 AND；事实用点路径取值，数组可用下标（`duplicateGuids.0.guid`），与 `unity_batch` 的 `expect.path` 同一套写法。
 - 支持 `rulePack` / `rulePackPath` / `ruleIds` / `maxObjects` / `maxFindings` 过滤，命中过多会截断并给出告警。
+- 安装脚本时一并把 `Agent~/rules` 复制到 `~/.xybridge/rules`，project 体检才能脱离 Unity 找到规则包。
 
 ### 设计约束（写进代码注释，别改）
 - 事实采集层**只记录看到什么，不判断对错**：不写 severity、不拼错误文案，判断全在规则包里。
 - 失败不返回半份数据：不支持的 scope 直接抛错，避免被误读成「工程很干净」。
-- `project` 事实带 `present` 标记 —— Unity 的 `JsonUtility` 无法把 class 字段序列化成 null，只会给空壳对象，靠这个标记区分「真的扫过」和「没扫」。
+- 同名规则包只求值一次：显式 `rulePackPath` 覆盖安装目录里的同名包，否则命中会重复。
 - 作用域不匹配的规则**静默跳过**（跑 scene 体检时 project 规则本就不适用）；只有调用方用 `ruleIds` 显式点名时才提示，避免每次体检都刷告警。
+- 悬空引用扫描跳过 Unity 内置 GUID（前 16 位全 0，如 `0000000000000000f000000000000000`），否则全是误报。
+- 扫描有 64MB 字节上限，超了给告警而不是悄悄少扫。
 
 ### 验证
-- `MCP~` 单测从 50 项扩到 60 项，新增体检器用例：缺失脚本按对象命中、project 规则只出一条不按对象重复、干净工程零发现、作用域不匹配静默跳过、显式点名才告警、未知算子报错、随包规则包格式校验。
-- Unity 2022.3.53f1 实机：`scope=scene` 返回 SampleScene 2 个对象；`scope=project` 扫描 150 个 meta / 2 个 asmdef，干净工程 `findingCount=0` 且无告警。
-- 受控验证：临时复制一份 `.meta` 造出重复 GUID，`unity.duplicate-guid` 命中，evidence 正确列出两条冲突路径；清理后回到 0。
+- `MCP~` 单测从 50 项扩到 66 项：缺失脚本按对象命中、重复 GUID、悬空引用的文件/行号/字段名、内置 GUID 不误报、asmdef 断裂、project 规则只出一条不按对象重复、同名规则包去重、工程路径缺失/非 Unity 目录的报错、未知算子报错、随包规则包格式校验。
+- Unity 2022.3.53f1 编译干净；scene 作用域实机返回 SampleScene 2 个对象。
+- **在真实工程上跑出两个真问题**（P3 验收）：
+  - `E:\UnityProject\2024\WB\HZCity`：两个场景的 `m_LightingSettings` 都指向已删除的 Lighting Settings 资产（GUID `93345c4d…`），Unity 里显示 None，之前调的光照参数静默丢失。
+  - `XY_Editor` 自身：`ModelMaterialImporter/PBR_SGTemplate.asset` 的 `targetShader` 指向不存在的 ShaderGraph（`bb809bfb…`），`ModelMaterialImporter.cs:134` 遇到 null 直接 `LogError` 返回 —— 用 PBR_SG 模板导材质会直接失败。
 
 ## [2.0.0] - 2026-10-23
 

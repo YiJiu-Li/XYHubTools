@@ -22,11 +22,11 @@ MCP 配置只需写一次，之后导入任何 Unity 工程都不用再改。
 所以「能否建立 TCP 连接」才是存活判据。
 """
 
-import json, os, sys, time, threading, math, hashlib, socket
+import json, os, re, sys, time, threading, math, hashlib, socket
 import urllib.request, urllib.error, urllib.parse
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-SERVER_VERSION = "2.0.0"
+SERVER_VERSION = "2.1.0"
 with open(__file__, "rb") as _script_file:
     RUNNING_SCRIPT_SHA256 = hashlib.sha256(_script_file.read()).hexdigest()
 
@@ -1142,9 +1142,10 @@ ALL_TOOLS.append({
 })
 ALL_TOOLS.append({
     "name": "unity_audit_module",
-    "description": "只读体检：Unity 采集事实，按规则包（Agent~/rules/<pack>/rules.json）求值并返回结构化发现。不改工程、不落盘。规则是数据，新增规则无需重编译 Unity。scope=scene 检查当前场景对象；scope=project 检查工程资产（GUID 重复、asmdef 引用断裂）。",
+    "description": "只读体检：Unity 采集事实，按规则包（Agent~/rules/<pack>/rules.json）求值并返回结构化发现。不改工程、不落盘。规则是数据，新增规则无需重编译 Unity。scope=scene 检查当前场景（需要 Unity 开着）；scope=project 检查工程资产（GUID 重复 / asmdef 断裂 / 悬空引用），直接读文件，不需要 Unity。",
     "inputSchema": {"type": "object", "additionalProperties": False, "properties": {
         "scope": {"type": "string", "enum": ["scene", "project"], "default": "scene"},
+        "projectPath": {"type": "string", "description": "scope=project 时体检哪个工程（根目录）。不填则用当前绑定的 Unity 工程"},
         "rulePack": {"type": "string", "description": "只跑某个规则包，如 unity-core"},
         "rulePackPath": {"type": "string", "description": "额外加载一个 rules.json（本地试验用）"},
         "ruleIds": {"type": "array", "items": {"type": "string"}, "maxItems": 50,
@@ -1280,8 +1281,277 @@ def _rule_match(rule, obj):
     return True, actual
 
 
+# ═══════════════ project 作用域：本地文件事实（不需要 Unity）═══════════════
+#  分工再细化一层：
+#    · scope=scene   —— 必须问 Unity（运行时状态：对象树、组件、missing script）
+#    · scope=project —— 纯文件内容（.meta 的 GUID、.asmdef 的引用、资产里写死的 GUID）
+#  工程资产事实不需要打开编辑器，也不需要桥接：直接读文件更快，还能在 CI 里跑。
+
+_SCAN_EXTS = (
+    ".unity", ".prefab", ".mat", ".asset", ".controller", ".anim",
+    ".overrideController", ".physicMaterial", ".renderTexture",
+)
+_SCAN_BYTE_LIMIT = 64 * 1024 * 1024
+_MAX_DANGLING = 200
+_GUID_LINE = re.compile(r"^guid:\s*([0-9a-fA-F]{32})\s*$")
+_GUID_REF = re.compile(r"guid:\s*([0-9a-fA-F]{32})")
+_YAML_KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_.]*):")
+
+
+def _walk_files(root, exts):
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for name in filenames:
+            if name.endswith(exts):
+                yield os.path.join(dirpath, name)
+
+
+def _rel(root, path):
+    return os.path.relpath(path, root).replace("\\", "/")
+
+
+def _read_meta_guid(path):
+    """guid 一定在 .meta 最前面几行，只读开头，不整文件读入。"""
+    try:
+        with open(path, encoding="utf-8", errors="ignore") as stream:
+            for _ in range(8):
+                line = stream.readline()
+                if not line:
+                    break
+                if line.startswith("guid:"):
+                    return line[5:].strip()
+    except OSError:
+        return None
+    return None
+
+
+def _is_builtin_guid(guid):
+    """Unity 内置资源（default resources / builtin extra）的 GUID 前 16 位全 0。"""
+    return guid.startswith("0000000000000000")
+
+
+def _asmdef_ref_ok(reference, names, known):
+    if reference.startswith("GUID:"):
+        return reference[5:].strip() in known
+    return reference in names
+
+
+def _collect_project_facts(project_root, warnings):
+    """扫描工程资产文件。只记录事实，不做判断。"""
+    assets = os.path.join(project_root, "Assets")
+    if not os.path.isdir(assets):
+        raise ValueError("不是 Unity 工程（找不到 Assets 目录）: " + project_root)
+
+    # ── 1) 已知 GUID：Assets 里的归自己，Packages / PackageCache 的只当"存在" ──
+    owners = {}
+    meta_count = 0
+    for path in _walk_files(assets, (".meta",)):
+        meta_count += 1
+        guid = _read_meta_guid(path)
+        if guid:
+            owners.setdefault(guid, []).append(_rel(project_root, path))
+
+    known = set(owners)
+    for base in (
+        os.path.join(project_root, "Packages"),
+        os.path.join(project_root, "Library", "PackageCache"),
+    ):
+        if os.path.isdir(base):
+            for path in _walk_files(base, (".meta",)):
+                guid = _read_meta_guid(path)
+                if guid:
+                    known.add(guid)
+
+    duplicates = [
+        {"guid": guid, "paths": paths}
+        for guid, paths in owners.items()
+        if len(paths) > 1
+    ]
+    duplicates.sort(key=lambda item: item["guid"])
+
+    # ── 2) asmdef 引用：先收齐程序集名，再逐条核对 ──
+    names = set()
+    parsed_asmdefs = []
+    for path in _walk_files(assets, (".asmdef",)):
+        try:
+            with open(path, encoding="utf-8", errors="ignore") as stream:
+                body = json.load(stream)
+        except (OSError, ValueError) as e:
+            warnings.append("解析 asmdef 失败 %s: %s" % (_rel(project_root, path), e))
+            continue
+        if not isinstance(body, dict) or not body.get("name"):
+            continue
+        names.add(body["name"])
+        parsed_asmdefs.append((path, body))
+
+    asmdefs = []
+    broken_total = 0
+    for path, body in parsed_asmdefs:
+        references = body.get("references") or []
+        broken = [
+            ref for ref in references
+            if ref and not _asmdef_ref_ok(ref, names, known)
+        ]
+        broken_total += len(broken)
+        asmdefs.append({
+            "name": body["name"],
+            "path": _rel(project_root, path),
+            "referenceCount": len(references),
+            "brokenReferences": broken,
+        })
+    asmdefs.sort(key=lambda item: item["path"])
+
+    # ── 3) 悬空引用：资产里写了 GUID，但整个工程 + 包缓存都找不到它 ──
+    dangling = {}
+    scanned = 0
+    total_bytes = 0
+    truncated = False
+    for path in _walk_files(assets, _SCAN_EXTS):
+        try:
+            total_bytes += os.path.getsize(path)
+        except OSError:
+            continue
+        if total_bytes > _SCAN_BYTE_LIMIT:
+            truncated = True
+            break
+        scanned += 1
+        rel = _rel(project_root, path)
+        key = ""
+        try:
+            with open(path, encoding="utf-8", errors="ignore") as stream:
+                for lineno, line in enumerate(stream, 1):
+                    match = _YAML_KEY.match(line.strip())
+                    if match:
+                        key = match.group(1)
+                    for ref in _GUID_REF.finditer(line):
+                        guid = ref.group(1)
+                        if guid in known or _is_builtin_guid(guid):
+                            continue
+                        dangling.setdefault(guid, []).append(
+                            {"file": rel, "line": lineno, "key": key}
+                        )
+        except OSError:
+            continue
+    if truncated:
+        warnings.append(
+            "资产文件总大小超过 %d MB，悬空引用扫描被截断"
+            % (_SCAN_BYTE_LIMIT // (1024 * 1024))
+        )
+
+    dangling_list = [
+        {"guid": guid, "refs": refs} for guid, refs in sorted(dangling.items())
+    ]
+    if len(dangling_list) > _MAX_DANGLING:
+        warnings.append(
+            "悬空引用超过 %d 个，只返回前 %d 个" % (_MAX_DANGLING, _MAX_DANGLING)
+        )
+        dangling_list = dangling_list[:_MAX_DANGLING]
+
+    return {
+        "present": True,
+        "projectPath": project_root.replace("\\", "/"),
+        "metaCount": meta_count,
+        "parsedGuidCount": len(owners),
+        "duplicateGuidCount": len(duplicates),
+        "duplicateGuids": duplicates,
+        "asmdefCount": len(asmdefs),
+        "brokenAsmdefRefCount": broken_total,
+        "asmdefs": asmdefs,
+        "scannedAssetCount": scanned,
+        "danglingRefCount": len(dangling_list),
+        "danglingRefs": dangling_list,
+    }
+
+
+def _project_rule_packs(project_root, warnings):
+    """project 体检不连 Unity，规则包从安装目录或工程内的包里取。"""
+    roots = []
+    installed = os.path.join(os.path.expanduser("~"), ".xybridge", "rules")
+    if os.path.isdir(installed):
+        roots.append(installed)
+    roots.append(os.path.join(project_root, "Packages", "com.yzj.xyhubtools", "Agent~", "rules"))
+    cache = os.path.join(project_root, "Library", "PackageCache")
+    if os.path.isdir(cache):
+        for name in sorted(os.listdir(cache)):
+            if name.startswith("com.yzj.xyhubtools"):
+                roots.append(os.path.join(cache, name, "Agent~", "rules"))
+
+    packs, seen = [], set()
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for pack_name in sorted(os.listdir(root)):
+            file = os.path.join(root, pack_name, "rules.json")
+            if pack_name in seen or not os.path.isfile(file):
+                continue
+            seen.add(pack_name)
+            try:
+                with open(file, encoding="utf-8") as stream:
+                    packs.append({
+                        "name": pack_name,
+                        "path": file.replace("\\", "/"),
+                        "json": stream.read(),
+                    })
+            except OSError as e:
+                warnings.append("读取规则包失败 %s: %s" % (file, e))
+    if not packs:
+        warnings.append(
+            "未找到规则包：应在 ~/.xybridge/rules/<pack>/rules.json，"
+            "或工程内 Packages/com.yzj.xyhubtools/Agent~/rules"
+        )
+    return packs
+
+
+def _resolve_project_root(args):
+    want = (args.get("projectPath") or "").strip()
+    if want:
+        root = os.path.realpath(os.path.expanduser(want))
+        # 存在就往下走，是不是 Unity 工程交给 _collect_project_facts 判断，
+        # 这样能给出「缺 Assets 目录」而不是含糊的「定位不到」
+        return root if os.path.isdir(root) else None
+    # 没显式给就从当前绑定的 Unity 实例推断（Unity 没开就放弃）
+    try:
+        bound = bound_project_path()
+    except Exception:
+        bound = None
+    if bound and os.path.isdir(os.path.join(bound, "Assets")):
+        return bound
+    return None
+
+
+def _project_facts(args, warnings):
+    root = _resolve_project_root(args)
+    if not root:
+        return None, (
+            "无法定位要体检的工程：请显式传 projectPath（工程根目录），"
+            "或先让 Unity 打开该工程"
+        )
+    try:
+        project = _collect_project_facts(root, warnings)
+    except ValueError as e:
+        return None, str(e)
+    return {
+        "scope": "project",
+        "project": project,
+        "rulePacks": _project_rule_packs(root, warnings),
+        "warnings": warnings,
+    }, None
+
+
+def _scene_facts(args):
+    payload = {"scope": "scene"}
+    if args.get("maxObjects"):
+        payload["maxObjects"] = int(args["maxObjects"])
+    response = UP.call("audit_module", json.dumps(payload, ensure_ascii=False), timeout_s=120.0)
+    if not response.get("ok"):
+        return None, (response.get("error") or response.get("message") or "体检请求失败")
+    try:
+        return json.loads(response.get("message") or ""), None
+    except ValueError as e:
+        return None, "Unity 返回的体检事实不是合法 JSON: %s" % e
+
+
 def _load_rule_packs(facts, args, warnings):
-    packs = list(facts.get("rulePacks") or [])
+    packs = []
     extra = args.get("rulePackPath")
     if extra:
         try:
@@ -1290,6 +1560,18 @@ def _load_rule_packs(facts, args, warnings):
                               "path": extra, "json": stream.read()})
         except OSError as e:
             warnings.append("读取 rulePackPath 失败: %s" % e)
+    packs.extend(facts.get("rulePacks") or [])
+
+    # 同名规则包只保留第一个：显式 rulePackPath 覆盖安装目录里的同名包，
+    # 否则同一套规则会被求值两遍，命中重复。
+    unique, seen = [], set()
+    for pack in packs:
+        name = pack.get("name")
+        if name in seen:
+            continue
+        seen.add(name)
+        unique.append(pack)
+    packs = unique
 
     wanted = args.get("rulePack")
     if wanted:
@@ -1302,20 +1584,16 @@ def _load_rule_packs(facts, args, warnings):
 def run_audit(args):
     """只读体检：不改工程、不落盘，失败也不影响 Unity 状态。"""
     scope = args.get("scope") or "scene"
-    payload = {"scope": scope}
-    if args.get("maxObjects"):
-        payload["maxObjects"] = int(args["maxObjects"])
-
-    response = UP.call("audit_module", json.dumps(payload, ensure_ascii=False), timeout_s=120.0)
-    if not response.get("ok"):
-        return PipelineToolResult(json.dumps(
-            {"ok": False, "error": response.get("error") or response.get("message") or "体检请求失败"},
-            ensure_ascii=False), True)
-    text = response.get("message") or ""
-    try:
-        facts = json.loads(text)
-    except ValueError as e:
-        return PipelineToolResult(json.dumps({"ok": False, "error": "Unity 返回的体检事实不是合法 JSON: %s" % e}, ensure_ascii=False), True)
+    if scope == "scene":
+        facts, error = _scene_facts(args)
+    elif scope == "project":
+        facts, error = _project_facts(args, [])
+    else:
+        facts, error = None, "audit scope 只支持 scene / project，收到: " + str(scope)
+    if error:
+        return PipelineToolResult(
+            json.dumps({"ok": False, "error": error}, ensure_ascii=False), True
+        )
 
     warnings = list(facts.get("warnings") or [])
     try:
@@ -1395,9 +1673,11 @@ def run_audit(args):
         "isPlaying": facts.get("isPlaying"),
         "projectPath": project.get("projectPath"),
         "metaCount": project.get("metaCount"),
+        "scannedAssetCount": project.get("scannedAssetCount"),
         "duplicateGuidCount": project.get("duplicateGuidCount"),
         "asmdefCount": project.get("asmdefCount"),
         "brokenAsmdefRefCount": project.get("brokenAsmdefRefCount"),
+        "danglingRefCount": project.get("danglingRefCount"),
         "objectCount": facts.get("objectCount"),
         "truncated": facts.get("truncated"),
         "rulePacks": [p.get("name") for p in packs],

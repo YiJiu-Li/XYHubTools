@@ -68,42 +68,6 @@ namespace Framework.XYEditor.Bridge
         }
 
         [Serializable]
-        internal class DuplicateGuidFact
-        {
-            public string guid;
-            public string[] paths;
-        }
-
-        [Serializable]
-        internal class AsmdefFact
-        {
-            public string name;
-            public string path;
-            public int referenceCount;
-            /// <summary>解析不到的引用原文（名字或 GUID:xxx）。</summary>
-            public string[] brokenReferences;
-        }
-
-        /// <summary>project 范围的事实。scene 范围时 present=false。</summary>
-        [Serializable]
-        internal class ProjectFact
-        {
-            /// <summary>
-            /// JsonUtility 无法把 class 字段序列化成 null，只会给一个空对象，
-            /// 所以用这个标记区分「真的扫过工程」和「没扫」。规则求值靠它判断。
-            /// </summary>
-            public bool present;
-            public string projectPath;
-            public int metaCount;
-            public int parsedGuidCount;
-            public int duplicateGuidCount;
-            public DuplicateGuidFact[] duplicateGuids;
-            public int asmdefCount;
-            public int brokenAsmdefRefCount;
-            public AsmdefFact[] asmdefs;
-        }
-
-        [Serializable]
         internal class AuditFacts
         {
             public string scope;
@@ -116,7 +80,6 @@ namespace Framework.XYEditor.Bridge
             public int maxObjects;
             public bool truncated;
             public ObjectFact[] objects;
-            public ProjectFact project;
             public RulePackFact[] rulePacks;
             public string[] warnings;
         }
@@ -126,10 +89,9 @@ namespace Framework.XYEditor.Bridge
         // ═══════════════════════════════════════════════════════════════
 
         /// <summary>
-        /// 采集事实。参数为 JSON：{"scope":"scene|project","maxObjects":2000}
-        ///   · scene   —— 当前活动场景的对象树与组件
-        ///   · project —— 工程级资产事实（GUID 重复、asmdef 引用断裂）
-        /// prefab 范围留给后续版本，别在这里加半成品分支。
+        /// 采集**场景**事实。参数为 JSON：{"scope":"scene","maxObjects":2000}
+        /// 工程资产事实（GUID 重复 / asmdef 断裂 / 悬空引用）不在这里做 ——
+        /// 那些是纯文件内容，MCP 侧直接读文件，不需要打开编辑器。
         /// </summary>
         public static string CollectFacts(string argsJson)
         {
@@ -156,21 +118,14 @@ namespace Framework.XYEditor.Bridge
                 maxObjects = maxObjects,
             };
 
-            if (scope == "scene")
-            {
-                CollectSceneFacts(facts, maxObjects, warnings);
-            }
-            else if (scope == "project")
-            {
-                facts.project = CollectProjectFacts(warnings);
-            }
-            else
+            if (scope != "scene")
             {
                 // 明确失败，不返回半份数据 —— 让调用方知道是没实现，而不是「工程很干净」
                 throw new NotSupportedException(
-                    "audit scope 只支持 scene / project，收到: " + scope
+                    "AuditService 只采集 scene 事实，收到: " + scope
                 );
             }
+            CollectSceneFacts(facts, maxObjects, warnings);
 
             facts.rulePacks = LoadRulePacks(warnings).ToArray();
             facts.warnings = warnings.ToArray();
@@ -292,177 +247,6 @@ namespace Framework.XYEditor.Bridge
                 missingScripts = missing,
                 components = list.ToArray(),
             };
-        }
-
-        // ═══════════════════════════════════════════════════════════════
-        //  project 范围：GUID 重复 / asmdef 引用断裂
-        // ═══════════════════════════════════════════════════════════════
-        //  这两件事 Unity 的 AssetDatabase 不会告诉你（它自己就把重复 GUID
-        //  当成"其中一个生效"），只能读 .meta / .asmdef 原文。仍然只采事实。
-
-        /// <summary>工程扫描的硬上限，防止超大工程把通道打满。</summary>
-        private const int MaxProjectFiles = 200000;
-
-        [Serializable]
-        internal class AsmdefJson
-        {
-            public string name;
-            public string[] references;
-        }
-
-        private static ProjectFact CollectProjectFacts(List<string> warnings)
-        {
-            string projectRoot = Path.GetDirectoryName(Application.dataPath);
-            var fact = new ProjectFact
-            {
-                present = true,
-                projectPath = projectRoot.Replace('\\', '/'),
-            };
-
-            var guidMap = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
-            int scanned = 0;
-            foreach (string meta in Directory.EnumerateFiles(Application.dataPath, "*.meta", SearchOption.AllDirectories))
-            {
-                if (++scanned > MaxProjectFiles)
-                {
-                    warnings.Add("meta 文件数超过 " + MaxProjectFiles + "，扫描被截断");
-                    break;
-                }
-
-                fact.metaCount++;
-                string guid = ReadGuidFromMeta(meta);
-                if (string.IsNullOrEmpty(guid))
-                    continue;
-                if (!guidMap.TryGetValue(guid, out var owners))
-                {
-                    owners = new List<string>(1);
-                    guidMap[guid] = owners;
-                }
-                owners.Add(ToAssetPath(projectRoot, meta));
-            }
-            fact.parsedGuidCount = guidMap.Count;
-
-            var dups = new List<DuplicateGuidFact>();
-            foreach (var pair in guidMap)
-            {
-                if (pair.Value.Count < 2)
-                    continue;
-                dups.Add(new DuplicateGuidFact { guid = pair.Key, paths = pair.Value.ToArray() });
-            }
-            dups.Sort((a, b) => string.CompareOrdinal(a.guid, b.guid));
-            fact.duplicateGuids = dups.ToArray();
-            fact.duplicateGuidCount = dups.Count;
-
-            // asmdef 引用要两遍：先把所有程序集名收齐，再逐条检查引用。
-            var files = new List<string>(
-                Directory.EnumerateFiles(Application.dataPath, "*.asmdef", SearchOption.AllDirectories)
-            );
-            var names = new HashSet<string>(StringComparer.Ordinal);
-            var parsed = new List<KeyValuePair<string, AsmdefJson>>(files.Count);
-            foreach (string file in files)
-            {
-                var body = ParseAsmdef(file, warnings);
-                if (body == null || string.IsNullOrEmpty(body.name))
-                    continue;
-                names.Add(body.name);
-                parsed.Add(new KeyValuePair<string, AsmdefJson>(file, body));
-            }
-
-            var asmdefs = new List<AsmdefFact>(parsed.Count);
-            int brokenTotal = 0;
-            foreach (var pair in parsed)
-            {
-                string file = pair.Key;
-                var body = pair.Value;
-                var refs = body.references ?? new string[0];
-                var broken = new List<string>();
-                foreach (string reference in refs)
-                {
-                    if (string.IsNullOrEmpty(reference))
-                        continue;
-                    if (!IsReferenceResolvable(reference, names, guidMap))
-                        broken.Add(reference);
-                }
-
-                brokenTotal += broken.Count;
-                asmdefs.Add(
-                    new AsmdefFact
-                    {
-                        name = body.name,
-                        path = ToAssetPath(projectRoot, file),
-                        referenceCount = refs.Length,
-                        brokenReferences = broken.ToArray(),
-                    }
-                );
-            }
-
-            asmdefs.Sort((a, b) => string.CompareOrdinal(a.path, b.path));
-            fact.asmdefs = asmdefs.ToArray();
-            fact.asmdefCount = asmdefs.Count;
-            fact.brokenAsmdefRefCount = brokenTotal;
-            return fact;
-        }
-
-        /// <summary>只读 .meta 开头几行取 guid，不整文件读入。</summary>
-        private static string ReadGuidFromMeta(string path)
-        {
-            try
-            {
-                using (var reader = new StreamReader(path, Encoding.UTF8))
-                {
-                    // guid 一定在文件最前面几行；读 8 行没找到就放弃，避免读大文件。
-                    for (int i = 0; i < 8; i++)
-                    {
-                        string line = reader.ReadLine();
-                        if (line == null)
-                            break;
-                        if (line.StartsWith("guid:", StringComparison.Ordinal))
-                            return line.Substring(5).Trim();
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                // 单个 meta 读失败不该让整次体检失败，交给 warnings 汇总
-                Debug.LogWarning("[XY Audit] 读取 meta 失败 " + path + ": " + ex.Message);
-            }
-            return null;
-        }
-
-        private static AsmdefJson ParseAsmdef(string path, List<string> warnings)
-        {
-            try
-            {
-                string text = File.ReadAllText(path, Encoding.UTF8);
-                return JsonUtility.FromJson<AsmdefJson>(text);
-            }
-            catch (Exception ex)
-            {
-                warnings.Add("解析 asmdef 失败 " + path + ": " + ex.Message);
-                return null;
-            }
-        }
-
-        private static bool IsReferenceResolvable(
-            string reference,
-            HashSet<string> names,
-            Dictionary<string, List<string>> guidMap
-        )
-        {
-            const string GuidPrefix = "GUID:";
-            if (reference.StartsWith(GuidPrefix, StringComparison.Ordinal))
-                return guidMap.ContainsKey(reference.Substring(GuidPrefix.Length).Trim());
-            return names.Contains(reference);
-        }
-
-        /// <summary>绝对路径 → 工程内 Assets/... 形式，便于规则里直接展示。</summary>
-        private static string ToAssetPath(string projectRoot, string absolute)
-        {
-            string full = Path.GetFullPath(absolute).Replace('\\', '/');
-            string root = projectRoot.Replace('\\', '/').TrimEnd('/') + "/";
-            return full.StartsWith(root, StringComparison.OrdinalIgnoreCase)
-                ? full.Substring(root.Length)
-                : full;
         }
 
         // ═══════════════════════════════════════════════════════════════

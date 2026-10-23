@@ -56,6 +56,24 @@ namespace Framework.XYEditor.Bridge
 
         private static string ProjectRoot => Path.GetDirectoryName(Application.dataPath);
 
+        /// <summary>规则包目录，解析方式与 McpSourceDir 一致。</summary>
+        private static string RulesSourceDir
+        {
+            get
+            {
+                var info = UnityEditor.PackageManager.PackageInfo.FindForPackageName(
+                    "com.yzj.xyhubtools"
+                );
+                if (info != null && !string.IsNullOrEmpty(info.resolvedPath))
+                {
+                    var upmPath = Path.Combine(info.resolvedPath, "Agent~", "rules");
+                    if (Directory.Exists(upmPath))
+                        return upmPath;
+                }
+                return Path.Combine(Application.dataPath, "XYHubTools", "Agent~", "rules");
+            }
+        }
+
         private static string UserProfile =>
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
@@ -102,6 +120,40 @@ namespace Framework.XYEditor.Bridge
         {
             using (var sha = SHA256.Create())
                 return BitConverter.ToString(sha.ComputeHash(File.ReadAllBytes(path))).Replace("-", "");
+        }
+
+        /// <summary>
+        /// project 体检不连 Unity，规则包只能从固定位置取，所以安装时把 Agent~/rules 复制过去。
+        /// 用哈希比对，内容没变就不写盘。
+        /// </summary>
+        private static void InstallRulePacks()
+        {
+            string source = RulesSourceDir;
+            if (!Directory.Exists(source))
+                return;
+            string target = Path.Combine(StableDir, "rules");
+            foreach (string packDir in Directory.GetDirectories(source))
+            {
+                string file = Path.Combine(packDir, "rules.json");
+                if (!File.Exists(file))
+                    continue;
+                string destination = Path.Combine(
+                    target,
+                    Path.GetFileName(packDir),
+                    "rules.json"
+                );
+                try
+                {
+                    if (File.Exists(destination) && ScriptHash(file) == ScriptHash(destination))
+                        continue;
+                    Directory.CreateDirectory(Path.GetDirectoryName(destination));
+                    File.Copy(file, destination, true);
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning("[XY Bridge] 规则包安装失败 " + file + ": " + ex.Message);
+                }
+            }
         }
 
         private static void InstallScript(string source, string destination)
@@ -322,6 +374,9 @@ namespace Framework.XYEditor.Bridge
                 Directory.CreateDirectory(StableDir);
                 InstallScript(src, StableScript);
                 Debug.Log("[XY Bridge] 已安装 Hub 脚本: " + StableScript);
+
+                // 1b) 规则包：project 体检不连 Unity，规则只能从固定位置取
+                InstallRulePacks();
 
                 // 2) 工程根目录：保留给旧的「一工程一脚本」配置，新配置不再引用
                 InstallScript(src, Path.Combine(ProjectRoot, "xy_mcp_server.py"));

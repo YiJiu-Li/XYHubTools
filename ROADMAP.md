@@ -17,7 +17,7 @@
 | **P0 封板** | 把线 A 冻结成 v2.0.0 | 一条提交 + git tag | 0.5 天 | **已完成** |
 | ~~P1 mac 验收~~ | ~~真机验证跨平台~~ | — | — | **已关闭**（无 mac 用户） |
 | ~~P2 最小分发~~ | ~~陌生人能装上~~ | — | — | **已关闭**（git 足够） |
-| **P3 体检器 MVP** | 让 AI 有眼睛 | `unity_audit_module` + 规则包 schema + 3 条规则 | 1 周 | **机制已完成**（真问题验收待补） |
+| **P3 体检器 MVP** | 让 AI 有眼睛 | `unity_audit_module` + 规则包 schema + 4 条规则 | 1 周 | **已完成** |
 | **P4 语义预检批量** | 让 AI 敢改 | 唯一对象解析 + 新旧值对比计划 | 1 周 | **主线** |
 | **P5 经验复利** | 让插件越用越懂你的工程 | 规则数据化 + 案例回流 | 持续 | 主线 |
 
@@ -58,20 +58,30 @@
 **做了什么**
 1. 新增通道 `type: "audit_module"`，输出统一结构：`{ ruleId, severity, target, evidence, expected, actual, fixHint }`
 2. 规则**数据化**：JSON 规则包在 `Agent~/rules/<pack>/rules.json`，C# 侧只负责"取事实"，判断逻辑在规则里 —— 加规则不重编译 Unity 程序集
-3. 做了 3 条"零争议"规则：
+3. 做了 4 条"零争议"规则：
    - `unity.missing-script` — 场景里有丢失的脚本引用（`scope: scene`）
    - `unity.duplicate-guid` — 工程内重复 GUID（`scope: project`）
    - `unity.asmdef-broken-ref` — asmdef 引用断裂（`scope: project`）
+   - `unity.dangling-reference` — 资产引用了已不存在的资源（`scope: project`）
 
-**验收结果（如实记录）**
-- 机制验收**通过**：Unity 采事实 → Python 按规则包求值 → 返回结构化发现，全链路实机跑通。
-- 重复 GUID 规则**受控验证命中**：临时造一份重复 `.meta`，规则命中且 evidence 正确列出两条冲突路径。
-- "在真实工程上跑出用户原本没注意到的真问题"这一条**当前工程做不到** —— XY_Editor 只有 1 个空场景（相机+灯）+ 1 个粒子 prefab，150 个 meta 零重复、2 个 asmdef 引用完好。体检结果是干净的，这是正确结果，不是漏检。
-- **这条验收需要在有真实内容的工程上补做**。在此之前不能声称"体检器能发现你没注意到的问题"，只能说"它能正确地不误报"。
+**架构上的一处修正**：`scope=project` 的事实原本放在 C# 里采集，后来挪到 Python 直接读文件。
+理由：工程资产事实是纯文件内容（`.meta` 的 GUID、`.asmdef` 的引用、资产里写死的 GUID），
+不需要打开编辑器。挪走之后 project 体检不依赖 Unity，CI 里也能跑，还省一次桥接往返。
+`scope=scene` 仍然必须问 Unity —— 运行时状态没有替代来源。
+
+**验收结果**
+- 「在真实工程上跑出用户原本没注意到的真问题」—— **达成，两个**：
+  - `E:\UnityProject\2024\WB\HZCity`：两个场景的 `m_LightingSettings` 都指向已删除的 Lighting Settings
+    资产，Unity 里显示 None，之前调的光照参数静默丢失。
+  - `XY_Editor` 自身：`PBR_SGTemplate.asset` 的 `targetShader` 指向不存在的 ShaderGraph，
+    `ModelMaterialImporter.cs:134` 遇到 null 直接 `LogError` 返回 —— PBR_SG 模板功能实际是坏的。
+- 这两个都不是「规则写得太宽」撞出来的，而是**先看文件事实、再回头读代码确认影响面**得到的。
 
 **已知边界**
 - 只支持 `scene` / `project` 两个作用域，`prefab` 未做。
-- `project` 作用域扫的是文件系统（`.meta` / `.asmdef` 原文），不是 `AssetDatabase` —— 因为重复 GUID 和断裂引用恰恰是 `AssetDatabase` 不会告诉你的。
+- 悬空引用只扫 `.unity/.prefab/.mat/.asset/.controller/.anim/.overrideController`，
+  且总量上限 64MB；超了给告警而不是静默少扫。
+- 不检测"脚本编译错误"和"运行时报错"——那是 Console 的活，不是静态体检的活。
 
 ---
 

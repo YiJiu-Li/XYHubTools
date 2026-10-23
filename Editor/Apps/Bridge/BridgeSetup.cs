@@ -2,8 +2,8 @@
 //  BridgeSetup — MCP Bridge 安装配置（由 XYHub 面板调用）
 //
 //  Hub 模式：把 xy_mcp_server.py 安装到与工程无关的固定位置
-//      %USERPROFILE%\.xybridge\xy_mcp_server.py
-//  该脚本会自动发现所有存活的 Unity 管道（见其头部说明），因此：
+//      ~/.xybridge/xy_mcp_server.py
+//  该脚本会自动发现所有存活的 Unity 实例（见其头部说明），因此：
 //    · MCP 配置只需写一次，之后导入任何新工程都不用再改
 //    · 同时开着多个 Unity 时，用 unity_list_projects / unity_use_project 切换目标
 //
@@ -11,6 +11,9 @@
 //    · Codex    ~/.codex/config.toml        （单条 [mcp_servers.xybridge]）
 //    · VS Code  <工程>/.vscode/mcp.json     （单条，指向固定脚本）
 //    · WorkBuddy ~/.workbuddy-ai/mcp.json   （单条，交由 python --install-config 合并）
+//
+//  脚本只用 Python 标准库（2.0 起不再需要 pywin32），
+//  但解释器命令名按平台解析：Windows 是 python，macOS / Linux 通常是 python3。
 // ═══════════════════════════════════════════════════════════════
 
 using System;
@@ -108,7 +111,32 @@ namespace Framework.XYEditor.Bridge
             try
             {
                 File.Copy(source, temporary);
-                if (File.Exists(destination)) File.Replace(temporary, destination, destination + ".previous");
+                if (File.Exists(destination))
+                {
+                    try
+                    {
+                        // 优先原子替换：中途失败不会留下半个脚本
+                        File.Replace(temporary, destination, destination + ".previous");
+                    }
+                    catch (Exception ex)
+                        when (ex is PlatformNotSupportedException
+                            || ex is NotSupportedException
+                            || ex is IOException
+                            || ex is UnauthorizedAccessException)
+                    {
+                        // Mono 在 macOS / Linux 上对 File.Replace 支持不一致，
+                        // 退回到「先备份再覆盖」：不是原子操作，但一定能装完
+                        Debug.LogWarning(
+                            "[XY Bridge] 原子替换不可用（" + ex.GetType().Name + "），改用备份+覆盖"
+                        );
+                        try
+                        {
+                            File.Copy(destination, destination + ".previous", true);
+                        }
+                        catch { }
+                        File.Copy(temporary, destination, true);
+                    }
+                }
                 else File.Move(temporary, destination);
             }
             finally { if (File.Exists(temporary)) File.Delete(temporary); }
@@ -154,7 +182,7 @@ namespace Framework.XYEditor.Bridge
 
             msg.AppendLine();
             msg.AppendLine("下一步:");
-            msg.AppendLine("1. 安装 Python 依赖: pip install pywin32");
+            msg.AppendLine("1. 无需额外 Python 依赖（2.0 起脚本只用标准库，不再需要 pywin32）");
             msg.AppendLine("2. Codex / VS Code 均使用 stdio，重启客户端或新开会话后生效");
             msg.AppendLine("3. 多开 Unity 时用 unity_list_projects 查看、unity_use_project 切换");
             msg.AppendLine("4. Pipeline 命令已改为 HTTP 直连，无需安装 Unity CLI");
@@ -186,6 +214,86 @@ namespace Framework.XYEditor.Bridge
         // ═══════════════════════════════════════════════════════════
         //  实现
         // ═══════════════════════════════════════════════════════════
+
+        private static string _pythonCommand;
+
+        /// <summary>
+        /// 解析可用的 Python 解释器命令名。
+        /// macOS / Linux 上 `python` 经常不存在或指向 Python 2，必须优先试 python3；
+        /// Windows 上 `python` 可能是 Microsoft Store 的占位程序（运行会弹商店），
+        /// 所以不能只看 PATH，要真的执行一次并确认能打印版本号。
+        /// </summary>
+        internal static string ResolvePythonCommand()
+        {
+            if (!string.IsNullOrEmpty(_pythonCommand))
+                return _pythonCommand;
+
+            string overrideValue = Environment.GetEnvironmentVariable("XYBRIDGE_PYTHON");
+            if (!string.IsNullOrEmpty(overrideValue))
+                return _pythonCommand = overrideValue;
+
+            bool windows = Application.platform == RuntimePlatform.WindowsEditor;
+            string[] candidates = windows
+                ? new[] { "python", "python3" }
+                : new[] { "python3", "python" };
+
+            foreach (string candidate in candidates)
+            {
+                if (ProbePython(candidate, out string version))
+                {
+                    Debug.Log("[XY Bridge] 使用 Python 解释器: " + candidate + " (" + version + ")");
+                    return _pythonCommand = candidate;
+                }
+            }
+
+            // 都探测不到时退回平台默认值：让用户看到明确失败，而不是悄悄写一条跑不起来的配置
+            Debug.LogWarning("[XY Bridge] 未探测到可用的 Python，配置将写入平台默认命令名。");
+            return _pythonCommand = windows ? "python" : "python3";
+        }
+
+        private static bool ProbePython(string exe, out string version)
+        {
+            version = null;
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = exe,
+                    Arguments = "-c \"import sys;print(sys.version.split()[0])\"",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true,
+                };
+                using (var p = Process.Start(psi))
+                {
+                    if (p == null)
+                        return false;
+                    string stdout = p.StandardOutput.ReadToEnd().Trim();
+                    p.StandardError.ReadToEnd();
+                    if (!p.WaitForExit(5000))
+                    {
+                        try
+                        {
+                            p.Kill();
+                        }
+                        catch { }
+                        return false;
+                    }
+                    // 版本号形如 3.11.4；解析不出来就当作不可用（挡住 Store 占位程序）
+                    if (p.ExitCode != 0 || stdout.Length == 0)
+                        return false;
+                    if (stdout.Split('.')[0] != "3")
+                        return false;
+                    version = stdout;
+                    return true;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
 
         private static bool CopyPythonServer()
         {
@@ -314,9 +422,7 @@ namespace Framework.XYEditor.Bridge
                     return false;
                 }
 
-                string python =
-                    Environment.GetEnvironmentVariable("XYBRIDGE_PYTHON")
-                    ?? "python";
+                string python = ResolvePythonCommand();
 
                 var psi = new ProcessStartInfo
                 {
@@ -375,12 +481,15 @@ namespace Framework.XYEditor.Bridge
         {
             // 脚本用绝对路径，不再依赖 cwd —— 这样它和工程解耦，一份脚本服务所有工程
             string script = EscapeTomlString(StableScript);
+            string python = EscapeTomlString(ResolvePythonCommand());
             return
                 "[mcp_servers."
                 + serverName
                 + "]"
                 + Environment.NewLine
-                + "command = \"python\""
+                + "command = \""
+                + python
+                + "\""
                 + Environment.NewLine
                 + "args = [\""
                 + script
@@ -401,6 +510,7 @@ namespace Framework.XYEditor.Bridge
         private static string BuildVscodeMcpJson(string serverName)
         {
             string script = EscapeJsonString(StableScript);
+            string python = EscapeJsonString(ResolvePythonCommand());
             return
                 "{"
                 + Environment.NewLine
@@ -412,7 +522,9 @@ namespace Framework.XYEditor.Bridge
                 + Environment.NewLine
                 + "      \"type\": \"stdio\","
                 + Environment.NewLine
-                + "      \"command\": \"python\","
+                + "      \"command\": \""
+                + python
+                + "\","
                 + Environment.NewLine
                 + "      \"args\": [\""
                 + script

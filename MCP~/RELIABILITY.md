@@ -14,10 +14,35 @@ checks the installed file against the source; it does not claim to inspect
 every MCP client's running process. `projectSource` checks the local
 `Assets/XYHubTools/MCP~` path; it may be unavailable in UPM installations.
 
-Service JSON failures and pipe failures produce MCP `isError=true`.
-Pipe write failures are not automatically replayed: a write may have reached
-Unity even when the caller saw an error. A timeout similarly does not prove
-that the operation was not applied; inspect the object before retrying.
+Service JSON failures and transport failures produce MCP `isError=true`.
+Write failures, timeouts, and dropped connections are never automatically
+replayed: a write may have reached Unity even when the caller saw an error,
+and a timeout does not prove that the operation was not applied. Inspect the
+object before retrying.
+
+## Transport (2.0)
+
+The Bridge listens on `127.0.0.1` on an OS-assigned port and writes
+`{schema, transport, host, port, pid, token, projectPath, ...}` to
+`~/.xybridge/instances/xy-<project-fingerprint>-<pid>.json`. Discovery rules
+that the tests pin down:
+
+- An instance file is only a *candidate*. Liveness means "a TCP connection can
+  be established", so files left behind by a crash are ignored and eventually
+  cleaned up.
+- The token is generated per Editor start / domain reload and validated on
+  every envelope. A stale client gets an explicit auth error instead of silent
+  failures on each tool call; reconnecting re-reads the instance file.
+- The client watches the instance file's mtime before each call. A domain
+  reload rewrites it with a new port and token, so the stale connection is
+  dropped *before* the request is sent — otherwise the first call after every
+  C# recompile would fail with "connection closed".
+- The first message the server pushes (`unity_connected`) carries no token or
+  project path, because the client is not authenticated yet. `ping`/`status`
+  return those fields.
+- One MCP process keeps one connection open and multiplexes request ids. The
+  server accepts multiple concurrent connections (a probe connection from
+  `unity_list_projects` must not block the main one).
 
 ## Batch and verification
 
@@ -63,6 +88,9 @@ separate execution path with its own supported commands and restrictions.
 ## Tests
 
 Run `python -m unittest discover -s Assets/XYHubTools/MCP~ -p "test_*.py"`
-from the Unity project root with Python and pywin32 installed. These tests
-exercise error propagation, no-replay behavior, batch preflight, failure stops,
-read-back assertions, and the existing Pipeline integration.
+from the Unity project root. Only Python 3.8+ is required — no Unity, no
+Windows, no pywin32. `test_bridge_reliability.py` starts a fake Bridge server
+on a loopback socket and speaks the real NDJSON protocol, so it exercises
+discovery, handshake, token rejection, no-replay on disconnect and timeout,
+error propagation, batch preflight, failure stops, and read-back assertions.
+`test_pipeline_http.py` covers the Pipeline HTTP integration.

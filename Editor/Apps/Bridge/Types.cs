@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  共享类型定义 — PipeEnvelope / ScriptGlobals / ProgressSnapshot
+//  共享类型定义 — BridgeEnvelope / ScriptGlobals / ProgressSnapshot
 // ═══════════════════════════════════════════════════════════════
 
 using System;
@@ -14,9 +14,12 @@ using UnityEngine;
 
 namespace Framework.XYEditor.Bridge
 {
-    /// <summary>Pipe 消息信封</summary>
+    /// <summary>
+    /// Bridge 消息信封（NDJSON，一行一条）。
+    /// 传输层在 2.0 起改为本机 TCP，信封格式保持不变，仅新增 token 字段。
+    /// </summary>
     [Serializable]
-    internal class PipeEnvelope
+    internal class BridgeEnvelope
     {
         public string id = "";
         public string reply_to = "";
@@ -27,8 +30,13 @@ namespace Framework.XYEditor.Bridge
         public int processId;
         /// <summary>客户端标识：多客户端同时连时用来区分“谁在改”。</summary>
         public string client = "";
-        /// <summary>Unity 工程根目录。多工程场景下供 MCP server 识别"这条管道属于哪个工程"。</summary>
+        /// <summary>Unity 工程根目录。多工程场景下供 MCP server 识别"这条连接属于哪个工程"。</summary>
         public string projectPath = "";
+        /// <summary>
+        /// 每次 Editor 启动/域重载生成的一次性令牌，随 instance 文件下发。
+        /// 服务端逐条校验：只有能读到本机 instance 文件的进程才知道它。
+        /// </summary>
+        public string token = "";
     }
 
     /// <summary>代码执行进度快照</summary>

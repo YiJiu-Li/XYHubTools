@@ -1,11 +1,16 @@
 # XY Hub Tools
 
-> Unity 编辑器工具集合 - 提升开发效率的实用工具套件
+> Unity 编辑器工具集 + AI 操作层：本机 MCP Bridge、智能体技能与实用工具套件
 
 [![Unity Version](https://img.shields.io/badge/Unity-2022.3%2B-blue)](https://unity.com/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.8%2B%20%C2%B7%20stdlib%20only-3776AB)](https://www.python.org/)
 
 XY 自有代码使用 MIT；随附 Pipeline 及第三方组件遵循各自许可证，详见 [Pipeline 分发说明](Pipeline~/README.md)。
+
+> **2.0 起 Bridge 走本机 TCP（`127.0.0.1` + 一次性令牌），Windows / macOS / Linux 同一套代码，
+> 不再需要 pywin32。** 升级说明见 [CHANGELOG](CHANGELOG.md)。
+
 
 ## ✨ 功能特性
 
@@ -44,7 +49,8 @@ XY 自有代码使用 MIT；随附 Pipeline 及第三方组件遵循各自许可
 - 提供 `unity_*` 工具：C# 代码执行、场景/组件读写、Prefab 结构、资源管理、Console、截图、事件订阅、多工程切换；实际清单和版本通过 MCP 查询
 - `unity_cli` 直接通过 HTTP 调用 `com.unity.pipeline` 的 **160 个命令**（构建、测试、烘焙、动画、Project Settings、包管理等），
   两条通道互不影响
-- 支持 Named Pipe 本地桥接
+- 支持本机 TCP 本地桥接（`127.0.0.1` 随机端口 + 一次性令牌，跨平台）
+- MCP 侧只用 Python 标准库，无需 `pip install` 任何依赖
 - 支持 Codex stdio 连接
 - 支持 VS Code stdio 连接
 
@@ -117,12 +123,9 @@ XY 自有代码使用 MIT；随附 Pipeline 及第三方组件遵循各自许可
 ### 使用 MCP Bridge
 
 1. 在工具中心选择 **MCP Bridge**
-2. 点击 **启动管道**
+2. 点击 **启动服务**（`127.0.0.1` 上的端口由系统分配）
 3. 点击 **安装 / 更新 MCP（一次性）**
-4. 安装 Python 依赖:
-   ```bash
-   pip install pywin32
-   ```
+4. 不需要安装任何 Python 依赖（只用标准库）；本机需有 Python 3.8+
 
 #### Pipeline 命令浏览器
 
@@ -150,7 +153,7 @@ MCP 直接访问目标项目的 Pipeline HTTP 服务，不再寻找或启动 `un
 旧 `unity_cli` 名称仅作为兼容入口，不支持 CLI 自身的全局选项或 Player 目标选择。
 
 当前兼容包为 `0.8.0-xy.2`，由校验过的官方原包加独立补丁重建，已验证 Unity 2022.3.53f1。
-Unity 6 官方路线需在对应编辑器中单独验收。Python + pywin32 仍是 Bridge 的运行前提。更新包后需更新 MCP 脚本并
+Unity 6 官方路线需在对应编辑器中单独验收。Bridge 只需 Python 3.8+ 标准库，不需要 pywin32。更新包后需更新 MCP 脚本并
 重启 MCP 服务，才能使用新入口。
 
 团队项目请一并提交自动生成的 `Packages/XYBridge~/`、`Packages/manifest.json`
@@ -162,10 +165,11 @@ Unity 6 官方路线需在对应编辑器中单独验收。Python + pywin32 仍�
 点击 **安装 / 更新 MCP（一次性）** 后，插件会把 `xy_mcp_server.py` 安装到与工程无关的固定位置：
 
 ```
-%USERPROFILE%\.xybridge\xy_mcp_server.py
+~/.xybridge/xy_mcp_server.py      # Windows: %USERPROFILE%\.xybridge\
 ```
 
-该脚本会**自动发现所有存活的 Unity 管道**，因此 MCP 配置只需写一次，
+该脚本会**自动发现所有存活的 Unity 实例**（扫描 `~/.xybridge/instances/` 下由 Editor 写入的
+端口与令牌，能否连上才算存活），因此 MCP 配置只需写一次，
 之后把插件导入任何新工程都不用再改。安装时会同时写入三处（均为单条 `xybridge`）：
 
 | 客户端 | 位置 |
@@ -176,11 +180,12 @@ Unity 6 官方路线需在对应编辑器中单独验收。Python + pywin32 仍�
 
 ```toml
 [mcp_servers.xybridge]
-command = "python"
-args = ["C:\\Users\\<你>\\.xybridge\\xy_mcp_server.py", "--transport=stdio"]
+command = "python"            # macOS / Linux 自动写成 python3
+args = ["~/.xybridge/xy_mcp_server.py", "--transport=stdio"]
 startup_timeout_sec = 30
 ```
 
+> 解释器命令名由插件探测（真的执行一次并确认是 Python 3），也可用 `XYBRIDGE_PYTHON` 覆盖。
 > 旧版本按工程生成的 `xybridge_<工程名>` 条目会在安装时自动清理，配置不再随工程数量增长。
 
 修改后需要重启客户端或新开会话，当前会话通常不会热加载新增 MCP。
@@ -199,8 +204,8 @@ Hub 会自动发现所有实例：
 
 - Unity 2022.3（当前验证基线，其他版本需另行适配）
 - .NET Framework 4.x 或更高
-- 基础编辑器工具支持 Windows / macOS / Linux
-- MCP Bridge 当前使用 Windows Named Pipe，需要 Windows + Python + pywin32
+- 编辑器工具与 MCP Bridge 均支持 Windows / macOS / Linux
+- MCP Bridge 需要 Python 3.8+，只用标准库，**不需要 pywin32 或其他第三方包**
 
 ## 📖 文档
 
@@ -211,6 +216,13 @@ Hub 会自动发现所有实例：
 欢迎提交 Issue 和 Pull Request！
 
 ## 📝 更新日志
+
+### v2.0.0 (2026-10-23)
+- 🔀 **Bridge 传输层改为本机 TCP**：`127.0.0.1` 随机端口 + 一次性令牌，Windows / macOS / Linux 同一套代码，取代 Windows Named Pipe
+- 🧹 **不再需要 pywin32**：MCP 脚本只用 Python 标准库，安装不再需要 `pip install`
+- 🧭 实例发现改为 `~/.xybridge/instances/*.json`（端口、令牌、工程路径、PID），能否建立连接才是存活判据，崩溃残留自动失效
+- 🛡️ 令牌逐条校验；令牌不匹配在握手阶段就报错，不必等每个工具调用失败
+- 🧪 可靠性测试改为真实 TCP 回环 + 假 Unity 服务端，覆盖握手、令牌拒绝、断开/超时后不重放
 
 ### v1.5.0 (2026-09-29)
 - 🔗 MCP Bridge 改为 **Hub 模式**：server 自动发现所有存活的 Unity 管道，脚本安装到固定位置 `~/.xybridge/`，**MCP 配置只写一次**，导入新工程无需再改

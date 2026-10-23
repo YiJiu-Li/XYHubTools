@@ -5,6 +5,30 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.0] - 2026-10-23
+
+### 变更（不兼容）
+- Bridge 传输层由 Windows Named Pipe 改为本机 TCP：监听 `127.0.0.1` 上由系统分配的端口，Windows / macOS / Linux 使用同一套代码。`PipeServer` 移除，新增 `BridgeServer`；消息信封格式不变，`PipeEnvelope` 更名为 `BridgeEnvelope` 并新增 `token` 字段。
+- 实例发现改为 `~/.xybridge/instances/xy-<工程指纹>-<pid>.json`，内容含 host/port/token/工程路径/PID/版本。文件存在不再等于实例存活，**能否建立 TCP 连接**才是判据，崩溃残留文件自动失效并定期清理。
+- 一次性令牌每次 Editor 启动或域重载重新生成，服务端逐条校验；令牌不匹配在握手阶段即返回明确错误，不再让每个工具调用各自失败。
+- 首次推送的 `unity_connected` 不含令牌与工程路径（此时尚未认证），相关字段改由必带令牌的 `ping` / `status` 返回。
+
+### 移除
+- 不再依赖 pywin32：`MCP~` 脚本只用 Python 标准库（socket / threading / json），安装时无需 `pip install`。
+- 服务端 accept 循环不再串行等待连接处理结束，`unity_list_projects` 的探测连接不会阻塞主连接；命令执行仍由 `ExecuteCodeLock` 串行化。
+
+### 修复
+- `xy_mcp_server.py` 启动时残留调用已删除的 `resolve_pipe()` / `list_live_pipes()`，导致进程启动即 `NameError`；改为 `resolve_target()` / `list_instances()`。
+- 域重载后第一次调用必定失败（客户端仍握着旧端口）：客户端每次调用前比对实例文件 mtime，变了就先断开重连。实测重载后首次 `ping` 0.0s 成功。
+- `unity_execute_code` 的超时从 30s 放宽到 120s：冷启动要初始化 Roslyn（245 个引用），超时会被误报成「执行结果未知」。
+- 安装配置时按平台解析 Python 命令名（Windows `python`，macOS / Linux `python3`），并真实执行一次确认是 Python 3，避免 Microsoft Store 占位程序或 Python 2 被写进配置；可用 `XYBRIDGE_PYTHON` 覆盖。
+- 脚本安装的原子替换（`File.Replace`）在 Mono / Unix 上支持不一致且原先没有兜底，现改为失败时退回「备份 + 覆盖」，避免 macOS / Linux 上点安装直接失败。
+- 实例文件写入原先只捕获 `IOException`，现覆盖权限与「不支持」类异常：否则写失败会被静默当成「没有实例」，表现为 Unity 开着但 MCP 报未发现。
+
+### 验证
+- `MCP~` 可靠性测试重写为真实 TCP 回环 + 假 Unity 服务端，23 项通过：实例发现、握手绑定工程、令牌拒绝、断开与超时后不重放、连接复用、stdio 错误透传、批量预检与断言。
+- Windows 上 Unity 2022.3.53f1 编译通过；macOS / Linux 需在对应机器上按 `MCP~/RELIABILITY.md` 的清单验收。
+
 ## [1.8.0] - 2026-10-22
 
 ### 新增

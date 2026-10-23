@@ -15,10 +15,10 @@ namespace Framework.XYEditor.Bridge
     internal static class MessageDispatcher
     {
         /// <summary>请求入口：计时 + 记请求日志，再交给 HandleCoreAsync。</summary>
-        internal static async Task<PipeEnvelope> HandleAsync(PipeEnvelope msg)
+        internal static async Task<BridgeEnvelope> HandleAsync(BridgeEnvelope msg)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            PipeEnvelope result;
+            BridgeEnvelope result;
             try { result = await HandleCoreAsync(msg); }
             catch (Exception ex) { result = YZJBridge.Err(msg.id, ex.ToString()); }
             sw.Stop();
@@ -37,7 +37,7 @@ namespace Framework.XYEditor.Bridge
             return result;
         }
 
-        static async Task<PipeEnvelope> HandleCoreAsync(PipeEnvelope msg)
+        static async Task<BridgeEnvelope> HandleCoreAsync(BridgeEnvelope msg)
         {
             string reqId = msg.id;
             try
@@ -49,8 +49,8 @@ namespace Framework.XYEditor.Bridge
                         // 把进程号与工程路径带在响应里：Python 侧 unity_ping /
                         // unity_list_projects 读的是响应，不填的话恒为默认值
                         var pong = YZJBridge.Ok(reqId, "pong");
-                        pong.processId = PipeServer.EditorProcessId;
-                        pong.projectPath = PipeServer.ProjectRoot;
+                        pong.processId = BridgeServer.EditorProcessId;
+                        pong.projectPath = BridgeServer.ProjectRoot;
                         return pong;
                     }
                     case "status":
@@ -63,8 +63,8 @@ namespace Framework.XYEditor.Bridge
                             reqId,
                             s + (string.IsNullOrEmpty(scene) ? "" : " " + scene)
                         );
-                        st.processId = PipeServer.EditorProcessId;
-                        st.projectPath = PipeServer.ProjectRoot;
+                        st.processId = BridgeServer.EditorProcessId;
+                        st.projectPath = BridgeServer.ProjectRoot;
                         return st;
                     }
                     case "execute_code":
@@ -103,7 +103,7 @@ namespace Framework.XYEditor.Bridge
                             new[] { '\n' },
                             StringSplitOptions.RemoveEmptyEntries
                         );
-                        var tcs = new TaskCompletionSource<PipeEnvelope>();
+                        var tcs = new TaskCompletionSource<BridgeEnvelope>();
                         YZJBridge.PostToMainThread(
                             delegate
                             {
@@ -148,7 +148,7 @@ namespace Framework.XYEditor.Bridge
                     }
                     case "refresh_asset_database":
                     {
-                        var tcs = new TaskCompletionSource<PipeEnvelope>();
+                        var tcs = new TaskCompletionSource<BridgeEnvelope>();
                         YZJBridge.PostToMainThread(
                             delegate
                             {
@@ -480,7 +480,7 @@ namespace Framework.XYEditor.Bridge
         }
 
         /// <summary>把同步服务丢到主线程执行，异常回传给调用方。</summary>
-        static async Task<PipeEnvelope> RunOnMain(string reqId, Func<string> fn)
+        static async Task<BridgeEnvelope> RunOnMain(string reqId, Func<string> fn)
         {
             var tcs = new TaskCompletionSource<string>();
             YZJBridge.PostToMainThread(

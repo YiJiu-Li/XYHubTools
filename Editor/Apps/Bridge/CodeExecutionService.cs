@@ -139,7 +139,7 @@ namespace Framework.XYEditor.Bridge
         //  请求处理
         // ═══════════════════════════════════════════════════════════════
 
-        internal static PipeEnvelope HandleCancel(string requestId)
+        internal static BridgeEnvelope HandleCancel(string requestId)
         {
             ExecuteCodeRequestState rs;
             lock (RequestStateLock)
@@ -188,7 +188,7 @@ namespace Framework.XYEditor.Bridge
         }
 
         /// <summary>处理 execute_code：编译 + 执行完整流水线</summary>
-        internal static async Task<PipeEnvelope> HandleAsync(
+        internal static async Task<BridgeEnvelope> HandleAsync(
             string requestId,
             string code,
             Func<Action<string>, CancellationToken, Task<string>> ensureReady,

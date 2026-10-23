@@ -1,14 +1,14 @@
 // ═══════════════════════════════════════════════════════════════════════
-//  YZJBridge — Unity Editor Named Pipe 桥接（顶层协调器）
+//  YZJBridge — Unity Editor 本机桥接（顶层协调器）
 //  ══════════════════════════════════════════════════════════════════════
 //  功能说明：
-//    1. Named Pipe Server — 委托给 PipeServer
+//    1. 本机 TCP 服务 — 委托给 BridgeServer（2.0 起取代 Named Pipe，跨平台）
 //    2. execute_code      — 委托给 CodeExecutionService + SnippetCompiler
 //    3. 消息路由          — 委托给 MessageDispatcher
 //    4. 主线程队列        — PostToMainThread / PumpMainThreadQueue
 //
 //  启动方式：Unity Editor 加载时自动启动（[InitializeOnLoad]）
-//  管道名：  xybridge_unity_ + 项目路径（特殊字符替换为 _）
+//  监听地址：127.0.0.1:<系统分配端口>，写入 ~/.xybridge/instances/ 供 MCP 发现
 // ═══════════════════════════════════════════════════════════════════════
 
 using System;
@@ -56,7 +56,7 @@ namespace Framework.XYEditor.Bridge
 
         public static void Start()
         {
-            if (!_quitting) PipeServer.Start();
+            if (!_quitting) BridgeServer.Start();
         }
 
         private static void OnQuitting()
@@ -70,7 +70,7 @@ namespace Framework.XYEditor.Bridge
         public static void Stop()
         {
             CodeExecutionService.CancelActive("bridge stopped");
-            PipeServer.Stop();
+            BridgeServer.Stop();
             ClearMainThreadQueue();
         }
 
@@ -78,11 +78,15 @@ namespace Framework.XYEditor.Bridge
         //  公开状态（供 BridgeStatusTool 面板读取）
         // ═══════════════════════════════════════════════════════════════
 
-        public static bool IsPipeServerRunning => PipeServer.IsRunning;
+        public static bool IsServerRunning => BridgeServer.IsRunning;
 
-        public static bool IsPipeConnected => PipeServer.IsConnected;
+        public static bool IsConnected => BridgeServer.IsConnected;
 
-        public static string PipeDisplayName => PipeServer.PipeName;
+        /// <summary>监听地址，形如 127.0.0.1:52341。</summary>
+        public static string Endpoint => BridgeServer.Endpoint;
+
+        /// <summary>实例文件路径（MCP 侧靠它发现本工程）。</summary>
+        public static string InstanceFile => BridgeServer.InstanceFile;
 
         // ═══════════════════════════════════════════════════════════════
         //  主线程泵
@@ -99,7 +103,7 @@ namespace Framework.XYEditor.Bridge
             if (!_autoStartAttempted)
             {
                 _autoStartAttempted = true;
-                if (!PipeServer.IsRunning)
+                if (!BridgeServer.IsRunning)
                     Start();
             }
 
@@ -157,8 +161,8 @@ namespace Framework.XYEditor.Bridge
         //  响应构造器（供 CodeExecutionService / MessageDispatcher 调用）
         // ═══════════════════════════════════════════════════════════════
 
-        internal static PipeEnvelope Ok(string replyTo, string message) =>
-            new PipeEnvelope
+        internal static BridgeEnvelope Ok(string replyTo, string message) =>
+            new BridgeEnvelope
             {
                 type = "response",
                 reply_to = replyTo,
@@ -166,8 +170,8 @@ namespace Framework.XYEditor.Bridge
                 message = message,
             };
 
-        internal static PipeEnvelope Err(string replyTo, string error) =>
-            new PipeEnvelope
+        internal static BridgeEnvelope Err(string replyTo, string error) =>
+            new BridgeEnvelope
             {
                 type = "response",
                 reply_to = replyTo,

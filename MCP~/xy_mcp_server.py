@@ -1,37 +1,46 @@
 """
 YZJBridge MCP Server
 AI 通过 MCP 协议操控 Unity Editor
-只需: pip install pywin32
+无需任何第三方依赖：只用 Python 标准库（2.0 起不再需要 pywin32）
 
 Hub 模式 —— 一个 server 服务所有 Unity 工程
 ────────────────────────────────────────────────────────
-管道名 = \\\\.\\pipe\\xybridge_unity_<工程路径 sanitized>，每个工程一条。
-本脚本不再把「自己所在目录」当作唯一目标，而是自动发现所有存活的管道：
+每个 Unity Editor 在 127.0.0.1 上监听一个由系统分配的端口，并把
+{host, port, token, projectPath, pid} 写入
+    ~/.xybridge/instances/xy-<工程指纹>-<pid>.json
+本脚本扫描该目录发现所有存活实例：
 
   1. --project=<关键字> 命令行参数 / XYBRIDGE_PROJECT 环境变量（显式指定）
-  2. 脚本同目录推导出的管道（向后兼容旧的「一工程一脚本」用法）
-  3. 唯一存活的管道
+  2. 脚本位于工程根目录时推导出的该工程（向后兼容旧的「一工程一脚本」用法）
+  3. 唯一存活的实例
   4. 以上都不成立 → 报错并列出候选，用 unity_use_project 切换
 
 因此脚本可以放在任意固定位置（推荐 ~/.xybridge/），
 MCP 配置只需写一次，之后导入任何 Unity 工程都不用再改。
+
+文件存在不等于实例存活：Editor 崩溃会留下残留文件，
+所以「能否建立 TCP 连接」才是存活判据。
 """
 
-import json, os, sys, time, threading, math, hashlib
+import json, os, sys, time, threading, math, hashlib, socket
 import urllib.request, urllib.error, urllib.parse
-import win32file, win32pipe, pywintypes
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-SERVER_VERSION = "1.8.0"
+SERVER_VERSION = "2.0.0"
 with open(__file__, "rb") as _script_file:
     RUNNING_SCRIPT_SHA256 = hashlib.sha256(_script_file.read()).hexdigest()
-PIPE_PREFIX = "xybridge_unity_"
-# 注意：不能用 raw string —— r"\\.\pipe\\" 里的 \\ 是两个字面反斜杠，
-# 且 raw string 不能以单个反斜杠结尾。这里用普通字符串显式转义。
-PIPE_DIR = "\\\\.\\pipe\\"
+
+# Unity 端（BridgeServer.InstanceDir）写入实例文件的目录，两侧必须一致
+INSTANCE_DIR = os.path.join(os.path.expanduser("~"), ".xybridge", "instances")
+INSTANCE_SCHEMA = 2
+LOOPBACK = "127.0.0.1"
 
 # 显式指定的目标（--project= / XYBRIDGE_PROJECT）
 _PROJECT_ARG = None
+
+
+def _norm(path: str) -> str:
+    return os.path.normcase(os.path.normpath(path or ""))
 
 
 def _sanitize(path: str) -> str:
@@ -40,28 +49,74 @@ def _sanitize(path: str) -> str:
     )
 
 
-# 脚本同目录推导出的管道：旧的「一工程一脚本」模式下与 Unity 端算出来的一致
-PIPE_SELF = PIPE_DIR + PIPE_PREFIX + _sanitize(ROOT)
+def _load_instance(path: str):
+    """读一个实例文件；schema/字段不合法（含旧版管道残留）返回 None。"""
+    try:
+        with open(path, "r", encoding="utf-8") as stream:
+            data = json.load(stream)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("schema") != INSTANCE_SCHEMA:
+        return None
+    if data.get("transport") != "tcp":
+        return None
+    port = data.get("port")
+    if not isinstance(port, int) or not 1 <= port <= 65535:
+        return None
+    data["host"] = data.get("host") or LOOPBACK
+    data["path"] = path
+    return data
 
-# 运行时实际使用的管道保存在 UP.pipe（见 UnityPipe）——它取决于运行时发现结果，
-# 因此不再设模块级 PIPE 常量。
+
+def _is_alive(host: str, port: int, timeout_s: float = 0.25) -> bool:
+    """能否建立 TCP 连接 —— 判断实例是否存活的唯一依据。"""
+    try:
+        probe = socket.create_connection((host, port), timeout=timeout_s)
+    except OSError:
+        return False
+    try:
+        probe.close()
+    except OSError:
+        pass
+    return True
 
 
-def list_live_pipes(retries: int = 4):
-    """枚举当前存活的 xybridge 管道（返回完整路径列表，已排序）。
+def _cleanup_stale(path: str, days: int = 7) -> None:
+    """清掉长期失效的残留实例文件。
 
-    枚举 \\\\.\\pipe\\ 时可能撞上瞬时抖动：listdir 抛 OSError，或管道名
-    在「上一实例 dispose → 新实例创建」的瞬间不可见。这类抖动是毫秒级的，
-    因此拿到空结果时短暂重试，避免把瞬时状态误判成「没有实例」。
+    只在文件很旧时动手：刚创建的实例可能还在启动，误删会让它彻底发现不了。
+    """
+    try:
+        if time.time() - os.path.getmtime(path) > days * 86400:
+            os.remove(path)
+    except OSError:
+        pass
+
+
+def list_instances(retries: int = 3):
+    """扫描实例目录，返回当前存活的实例列表。
+
+    枚举目录时可能撞上瞬时抖动（文件正在被替换），拿到空结果时短暂重试，
+    避免把毫秒级状态误判成「没有实例」。
     """
     for attempt in range(retries):
         try:
-            names = os.listdir(PIPE_DIR)
+            names = sorted(n for n in os.listdir(INSTANCE_DIR) if n.endswith(".json"))
         except OSError:
             names = []
-        hits = sorted(PIPE_DIR + n for n in names if n.startswith(PIPE_PREFIX))
-        if hits:
-            return hits
+        found = []
+        for name in names:
+            path = os.path.join(INSTANCE_DIR, name)
+            data = _load_instance(path)
+            if data is None:
+                _cleanup_stale(path)
+                continue
+            if _is_alive(data["host"], data["port"]):
+                found.append(data)
+            else:
+                _cleanup_stale(path)
+        if found:
+            return found
         if attempt < retries - 1:
             time.sleep(0.05)
     return []
@@ -71,10 +126,10 @@ def _requested_project():
     return _PROJECT_ARG or os.environ.get("XYBRIDGE_PROJECT") or None
 
 
-def _match_pipe(keyword: str, candidates):
-    """按关键字匹配管道名（大小写不敏感）。返回 (pipe, err)。"""
-    k = _sanitize((keyword or "").strip()).lower()
-    hits = [p for p in candidates if k and k in p.lower()]
+def _match_instance(keyword: str, candidates):
+    """按工程路径片段匹配实例（大小写不敏感）。返回 (instance, err)。"""
+    k = (keyword or "").strip().lower()
+    hits = [i for i in candidates if k and k in (i.get("projectPath") or "").lower()]
     if len(hits) == 1:
         return hits[0], None
     if not hits:
@@ -82,27 +137,36 @@ def _match_pipe(keyword: str, candidates):
     return None, f"「{keyword}」匹配到 {len(hits)} 个实例，请写得更具体"
 
 
+def _endpoint(inst):
+    return "%s:%s" % (inst.get("host", LOOPBACK), inst.get("port", "?"))
+
+
 def _format_candidates(candidates):
     if not candidates:
         return "（当前没有任何存活的 Unity 实例）"
-    body = "\n".join("  - " + p for p in candidates)
+    body = "\n".join(
+        "  - " + (i.get("projectPath") or "?") + "  [" + _endpoint(i) + "]"
+        for i in candidates
+    )
     return "候选实例：\n" + body + "\n（用 unity_list_projects 可看到每个实例的工程路径与 PID）"
 
 
-def resolve_pipe():
-    """解析目标管道。返回 (pipe, err)；pipe 为 None 时 err 说明原因。"""
-    live = list_live_pipes()
+def resolve_target():
+    """解析目标实例。返回 (instance, err)；instance 为 None 时 err 说明原因。"""
+    live = list_instances()
 
     want = _requested_project()
     if want:
-        p, err = _match_pipe(want, live)
+        inst, err = _match_instance(want, live)
         if err:
             return None, err + "\n" + _format_candidates(live)
-        return p, None
+        return inst, None
 
-    # 向后兼容：脚本同目录推导出的管道优先（旧的「一工程一脚本」用法照旧）
-    if PIPE_SELF in live:
-        return PIPE_SELF, None
+    # 向后兼容：脚本直接放在工程根目录（旧的「一工程一脚本」用法）
+    if os.path.isdir(os.path.join(ROOT, "Assets")):
+        for inst in live:
+            if _norm(inst.get("projectPath")) == _norm(ROOT):
+                return inst, None
 
     if len(live) == 1:
         return live[0], None
@@ -111,7 +175,7 @@ def resolve_pipe():
         return None, (
             "未发现任何存活的 Unity Bridge。\n"
             "请确认：① Unity 已打开目标工程；"
-            "② XYHub > MCP Bridge 面板中「管道服务」正在运行。"
+            "② XYHub > MCP Bridge 面板中「本机服务」正在运行。"
         )
 
     return None, (
@@ -122,172 +186,244 @@ def resolve_pipe():
 
 
 
-# ═══════════════ Named Pipe 客户端（自动重连） ═══════════════
-class UnityPipe:
-    def __init__(self, pipe=None, explicit=False):
-        self.pipe = pipe          # 目标管道；None 表示交给 resolve_pipe() 决定
-        self.explicit = explicit  # True = 显式指定，管道消失时不自动改绑
-        self._h = None
+# ═══════════════ 本机 TCP 客户端（自动重连） ═══════════════
+class UnitySocket:
+    """到单个 Unity Editor 的常驻连接。
+
+    重连时会重读实例文件：Editor 域重载后端口和 token 都会变，
+    沿用旧值只会得到「认证失败」。
+    """
+
+    def __init__(self, instance=None, explicit=False):
+        self.instance = instance  # 目标实例 dict；None 表示交给 resolve_target() 决定
+        self.explicit = explicit  # True = 显式指定，实例消失时不自动改绑
+        self._sock = None
+        self._token = None
         self._n = 0
         self._lock = threading.Lock()
         self._buf = b""
+        self._peer_closed = False
         self._last_error = None
-        self.project_path = None
+        self._instance_mtime = 0.0
+        self.project_path = (instance or {}).get("projectPath")
 
-    def set_pipe(self, pipe, explicit=True):
-        """切换目标管道（会断开当前连接）。"""
+    # ── 目标切换 ──
+    def set_instance(self, instance, explicit=True):
+        """切换目标实例（会断开当前连接）。"""
         self.close()
-        self.pipe = pipe
+        self.instance = instance
         self.explicit = explicit
         self._last_error = None
-        self.project_path = None
+        self.project_path = (instance or {}).get("projectPath")
 
-    def _read_raw(self, timeout_s: float = 5.0):
-        if not self._h:
-            return None
-        result = [None]
-        exc = [None]
-        h = self._h
-        def _do():
+    @property
+    def endpoint(self):
+        return _endpoint(self.instance) if self.instance else None
+
+    # ── 收发 ──
+    def _recv_some(self, timeout_s: float):
+        self._sock.settimeout(max(0.001, timeout_s))
+        try:
+            data = self._sock.recv(65536)
+        except socket.timeout:
+            raise TimeoutError("timeout")
+        if not data:
+            raise ConnectionError("closed")
+        return data
+
+    def _read_line(self, deadline: float):
+        """读到一行（不含换行符）；超时返回 None，对端断开时置 _peer_closed。"""
+        idx = self._buf.find(b"\n")
+        while idx < 0:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return None
             try:
-                _, data = win32file.ReadFile(h, 65536)
-                result[0] = data
-            except Exception as e:
-                exc[0] = e
-        t = threading.Thread(target=_do, daemon=True)
-        t.start()
-        t.join(timeout_s)
-        if t.is_alive():
-            return None, TimeoutError("timeout")
-        return result[0], exc[0]
+                data = self._recv_some(min(remaining, 5.0))
+            except TimeoutError:
+                return None
+            except (ConnectionError, OSError):
+                self._peer_closed = True
+                self.close()
+                return None
+            self._buf += data
+            idx = self._buf.find(b"\n")
+        line = self._buf[:idx]
+        self._buf = self._buf[idx + 1 :]
+        return line.decode("utf-8", errors="ignore")
 
+    def _send(self, payload: dict) -> bool:
+        try:
+            self._sock.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+            return True
+        except OSError:
+            self.close()
+            return False
+
+    # ── 连接 ──
     def connect(self, timeout_ms: int = 5000):
-        # 已绑定的管道若已消失（工程被关掉 / 域重载后重开），重新解析目标
-        if self.pipe is not None and not self.explicit:
-            if self.pipe not in list_live_pipes():
-                self.pipe = None
-        if self.pipe is None:
-            # 解析失败可能是瞬时抖动，重试几次再判死
-            p, err = None, None
+        if self.instance is not None:
+            fresh = _load_instance(self.instance.get("path", ""))
+            if fresh:
+                self.instance = fresh
+            elif not self.explicit:
+                # 文件消失说明工程已关掉 / 实例已退出；
+                # 显式绑定时保留旧目标，让连接失败把问题暴露出来，而不是悄悄改绑
+                self.instance = None
+
+        if self.instance is None:
+            inst, err = None, None
             for _ in range(4):
-                p, err = resolve_pipe()
-                if p is not None:
+                inst, err = resolve_target()
+                if inst is not None:
                     break
                 time.sleep(0.06)
-            if p is None:
+            if inst is None:
                 self._last_error = err
                 return False
-            self.pipe = p
-            self._last_error = None
+            self.instance = inst
 
+        self._token = self.instance.get("token") or ""
+        # 记下这一版实例文件的 mtime：之后每次 call 靠它判断是否发生了域重载
+        try:
+            self._instance_mtime = os.path.getmtime(self.instance.get("path") or "")
+        except OSError:
+            self._instance_mtime = 0.0
         deadline = time.time() + max(timeout_ms, 1) / 1000.0
         while time.time() < deadline:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
             try:
-                wait_ms = max(1, int((deadline - time.time()) * 1000))
-                win32pipe.WaitNamedPipe(self.pipe, min(wait_ms, 500))
-                self._h = win32file.CreateFile(
-                    self.pipe,
-                    win32file.GENERIC_READ | win32file.GENERIC_WRITE,
-                    0,
-                    None,
-                    win32file.OPEN_EXISTING,
-                    0,
-                    None,
+                self._sock = socket.create_connection(
+                    (self.instance["host"], self.instance["port"]),
+                    timeout=max(0.05, min(remaining, 2.0)),
                 )
-                self._buf = b""
-                # 暖场 ping：确保 ReadFile 线程干净，避免冷启动首次 fail
-                self._n += 1
-                warm_id = str(self._n)
-                warm_req = json.dumps({"id": warm_id, "type": "ping", "message": ""}) + "\n"
-                win32file.WriteFile(self._h, warm_req.encode("utf-8"))
-                warm_deadline = time.time() + 5.0
-                while time.time() < warm_deadline:
-                    data, err = self._read_raw(timeout_s=min(2.0, warm_deadline - time.time()))
-                    if err is not None:
-                        # 任何读错误（含超时）都关闭句柄，让残留读线程退出后重连
-                        self.close()
-                        break
-                    if data:
-                        self._buf += data
-                        idx = self._buf.find(b"\n")
-                        if idx >= 0:
-                            line = self._buf[:idx].decode("utf-8", errors="ignore")
-                            self._buf = self._buf[idx + 1:]
-                            try:
-                                r = json.loads(line)
-                                # Unity 端响应带 reply_to 而不是 id
-                                if r.get("id") == warm_id or r.get("reply_to") == warm_id:
-                                    self._buf = b""
-                                    return True
-                            except json.JSONDecodeError:
-                                pass
-                if self._h:
-                    self._buf = b""
-                    return True
-            except Exception:
+            except OSError:
                 self.close()
                 time.sleep(0.05)
-        self._h = None
+                continue
+
+            try:
+                self._sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            except OSError:
+                pass
+            self._buf = b""
+            self._last_error = None
+
+            if self._handshake(max(0.5, min(5.0, deadline - time.time()))):
+                return True
+
+            self.close()
+            # 认证失败不是重试能解决的；但如果实例文件刚被替换（域重载），
+            # 下一轮 connect 会重读文件拿到新的端口和 token，所以继续循环而不是直接放弃
+            time.sleep(0.05)
+
+        self._last_error = self._last_error or "无法连接 Unity 实例"
         return False
+
+    def _handshake(self, timeout_s: float) -> bool:
+        """连接后先 ping 一次。
+
+        既是暖场，也顺便验证 token：令牌不对时能在这里给出明确错误，
+        而不是让后面每个工具调用都失败。
+        服务端连接后会主动推一条 unity_connected，本循环会跳过它。
+        """
+        self._n += 1
+        hid = str(self._n)
+        if not self._send({"id": hid, "type": "ping", "message": "", "token": self._token}):
+            self._last_error = "写入连接失败"
+            return False
+
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            line = self._read_line(deadline)
+            if line is None:
+                break
+            try:
+                reply = json.loads(line)
+            except ValueError:
+                continue
+            if reply.get("id") != hid and reply.get("reply_to") != hid:
+                continue
+            if not reply.get("ok"):
+                self._last_error = reply.get("error") or "握手被拒绝"
+                return False
+            self.project_path = reply.get("projectPath") or self.project_path
+            return True
+
+        self._last_error = self._last_error or "握手超时"
+        return False
+
+    # ── 请求 ──
+    def _refresh_if_changed(self):
+        """实例文件变了就先断开，让 connect() 重读端口与令牌。
+
+        Unity 每次域重载都会换端口和令牌并重写实例文件（文件名不变，内容变）。
+        没有这一步时，重载后的**第一次**调用必然撞在已经失效的连接上，
+        报「连接已断开」——虽然不会误判成功，但每次改 C# 都要白废一次调用。
+        只看 mtime，一次 stat 的成本可以忽略。
+        """
+        path = (self.instance or {}).get("path")
+        if not path:
+            return
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            return
+        if mtime == self._instance_mtime:
+            return
+        self._instance_mtime = mtime
+        fresh = _load_instance(path)
+        if fresh:
+            self.instance = fresh
+            self._token = fresh.get("token") or ""
+            self.close()
 
     def call(self, t: str, m: str = "", timeout_s: float = 30.0) -> dict:
         with self._lock:
-            if not self._h and not self.connect():
+            self._refresh_if_changed()
+            if not self._sock and not self.connect():
                 return {"ok": False, "error": self._last_error or "Unity 未连接"}
 
             self._n += 1
             req_id = str(self._n)
-            req = json.dumps({"id": req_id, "type": t, "message": m}) + "\n"
-            try:
-                win32file.WriteFile(self._h, req.encode("utf-8"))
-            except Exception:
-                self.close()
-                return {"ok": False, "error": "写入管道失败；执行结果未知，未自动重放请求"}
+            if not self._send({"id": req_id, "type": t, "message": m, "token": self._token}):
+                return {"ok": False, "error": "写入连接失败；执行结果未知，未自动重放请求"}
 
             deadline = time.time() + timeout_s
             while time.time() < deadline:
-                remaining = deadline - time.time()
-                if remaining <= 0:
+                line = self._read_line(deadline)
+                if line is None:
                     break
-                # 先看缓冲区有没有完整行
-                idx = self._buf.find(b"\n")
-                if idx < 0:
-                    data, err = self._read_raw(timeout_s=min(remaining, timeout_s))
-                    if err is not None:
-                        if isinstance(err, pywintypes.error) and err.winerror in (109, 233):
-                            self.close()
-                            return {"ok": False, "error": "管道断开"}
-                        if isinstance(err, TimeoutError):
-                            # 读超时会遗留一个仍阻塞在 ReadFile 的线程；必须关闭句柄
-                            # 让它退出，否则下次读会与它争抢同一条管道
-                            self.close()
-                            return {"ok": False, "error": "响应超时"}
-                    if data:
-                        self._buf += data
-                    idx = self._buf.find(b"\n")
-                    if idx < 0:
-                        continue
-                line = self._buf[:idx].decode("utf-8", errors="ignore")
-                self._buf = self._buf[idx + 1:]
                 try:
-                    r = json.loads(line)
-                except json.JSONDecodeError:
+                    reply = json.loads(line)
+                except ValueError:
                     continue
-                if r.get("id") == req_id or r.get("reply_to") == req_id:
-                    return r
+                if reply.get("id") == req_id or reply.get("reply_to") == req_id:
+                    return reply
+
+            # 超时和断开都不能证明操作没执行 —— 一律不自动重放
+            peer_closed = self._peer_closed
+            self._peer_closed = False
             self.close()
-            return {"ok": False, "error": "响应超时；执行结果未知，未自动重放请求"}
+            return {
+                "ok": False,
+                "error": ("连接已断开" if peer_closed else "响应超时")
+                + "；执行结果未知，未自动重放请求",
+            }
 
     def close(self):
-        if self._h:
+        if self._sock:
             try:
-                win32file.CloseHandle(self._h)
-            except:
+                self._sock.close()
+            except OSError:
                 pass
-            self._h = None
+        self._sock = None
+        self._buf = b""
 
 
-UP = UnityPipe()
+UP = UnitySocket()
 
 
 # Pipeline HTTP client. No Unity CLI executable or extra Python dependency required.
@@ -350,7 +486,11 @@ def bound_project_path():
     if not UP.explicit and want and os.path.isabs(want) and os.path.isdir(want):
         project = os.path.realpath(want)
         _pipeline_descriptor(project)
-        UP.set_pipe(PIPE_DIR + PIPE_PREFIX + _sanitize(project), explicit=True)
+        # 绑定同一个工程的 Unity 实例（找不到实例时只保留 Pipeline 工程路径）
+        for inst in list_instances():
+            if _norm(inst.get("projectPath")) == _norm(project):
+                UP.set_instance(inst, explicit=True)
+                break
         UP.project_path = project
         return project
     r = UP.call("status", "", timeout_s=5.0)
@@ -540,9 +680,9 @@ def compact_command_list(txt: str) -> str:
 
 
 # ═══════════════ 多工程：列举 / 切换 ═══════════════
-def probe_pipe(pipe, timeout_s: float = 3.0):
-    """临时连一次目标管道取 status，用于展示工程路径与 PID。失败返回 None。"""
-    tmp = UnityPipe(pipe, explicit=True)
+def probe_instance(inst, timeout_s: float = 3.0):
+    """临时连一次目标实例取 status，用于展示工程路径与 PID。失败返回 None。"""
+    tmp = UnitySocket(inst, explicit=True)
     try:
         if not tmp.connect(timeout_ms=int(timeout_s * 1000)):
             return None
@@ -562,25 +702,27 @@ def probe_pipe(pipe, timeout_s: float = 3.0):
 
 
 def cmd_list_projects() -> str:
-    live = list_live_pipes()
+    live = list_instances()
     if not live:
         return (
             "未发现任何存活的 Unity Bridge。\n"
-            "请确认 Unity 已打开目标工程，且 XYHub > MCP Bridge 面板中「管道服务」正在运行。"
+            "请确认 Unity 已打开目标工程，且 XYHub > MCP Bridge 面板中「本机服务」正在运行。"
         )
-    bound = UP.pipe
+    bound = UP.endpoint
     lines = [f"发现 {len(live)} 个 Unity 实例（当前绑定：{bound or '未绑定'}）", ""]
-    for p in live:
-        mark = "●" if p == bound else "○"
-        info = probe_pipe(p)
+    for inst in live:
+        mark = "●" if _endpoint(inst) == bound else "○"
+        info = probe_instance(inst)
         if info:
             lines.append(f"{mark} {info['projectName'] or '(未知工程)'}")
             lines.append(f"     path : {info['projectPath'] or '?'}")
             lines.append(f"     pid  : {info['processId']}")
+            lines.append(f"     addr : {_endpoint(inst)}")
         else:
-            lines.append(f"{mark} {p[len(PIPE_DIR) + len(PIPE_PREFIX):]}")
+            name = os.path.basename((inst.get("projectPath") or "").rstrip("\\/")) or "?"
+            lines.append(f"{mark} {name}")
             lines.append("     （探测失败：可能正在域重载或正忙）")
-        lines.append(f"     pipe : {p}")
+            lines.append(f"     addr : {_endpoint(inst)}")
     lines.append("")
     lines.append('用 unity_use_project "<工程名或路径片段>" 切换目标。')
     return "\n".join(lines)
@@ -596,26 +738,32 @@ def cmd_use_project(keyword: str) -> str:
             _pipeline_descriptor(project)
         except ValueError as e:
             return PipelineToolResult(json.dumps({"error": str(e)}, ensure_ascii=False), True)
-        UP.set_pipe(PIPE_DIR + PIPE_PREFIX + _sanitize(project))
+        for inst in list_instances():
+            if _norm(inst.get("projectPath")) == _norm(project):
+                UP.set_instance(inst)
+                return "已绑定 Unity 实例：" + project
+        UP.set_instance(None)
         UP.project_path = project
-        return "已绑定 Pipeline 工程：" + project
-    live = list_live_pipes()
+        return "已绑定 Pipeline 工程（未发现该工程的 Unity 实例）：" + project
+
+    live = list_instances()
     if not live:
         return "未发现任何存活的 Unity Bridge。"
-    p, err = _match_pipe(keyword, live)
+    inst, err = _match_instance(keyword, live)
     if err:
         return f"❌ {err}\n{_format_candidates(live)}"
-    UP.set_pipe(p)
-    info = probe_pipe(p)
+    UP.set_instance(inst)
+    info = probe_instance(inst)
     if info:
         if info.get("projectPath"):
             UP.project_path = os.path.realpath(info["projectPath"])
         return (
-            f"✅ 已绑定到 {info['projectName'] or p}\n"
+            f"✅ 已绑定到 {info['projectName'] or _endpoint(inst)}\n"
             f"   path : {info['projectPath'] or '?'}\n"
-            f"   pid  : {info['processId']}"
+            f"   pid  : {info['processId']}\n"
+            f"   addr : {_endpoint(inst)}"
         )
-    return f"✅ 已绑定到 {p}"
+    return f"✅ 已绑定到 {_endpoint(inst)}"
 
 
 ADVANCED_MESSAGES = {
@@ -838,7 +986,7 @@ ALL_TOOLS = [
         "description": (
             "直接调用 Pipeline HTTP，无需安装 Unity CLI；兼容原有命令字符串入口"
             "（构建、测试、烘焙、动画、Project Settings、包管理、run_script 热更等），"
-            "走 HTTP 回环，与本 Bridge 的命名管道互不影响。"
+            "走 HTTP 回环，与本 Bridge 的本机 TCP 通道互不影响。"
             "spec 写「命令名 参数...」，例：'editor_status'、'recompile'、"
             "'eval \"return 1+1;\"'、'get_scene_hierarchy --path Assets/Scenes/Main.unity'、"
             "'set_autotick --enable true'。留空则列出全部可用命令。"
@@ -1158,8 +1306,8 @@ def _unity_call(*args, **kwargs):
 
 
 def _handle_impl(name: str, args: dict, close_after: bool = False) -> str:
-    # close_after 默认 False：stdio 进程常驻，复用同一条管道连接，
-    # 避免每次工具调用都断开重连（重连含 WaitNamedPipe + 暖场 ping，最多 5s）。
+    # close_after 默认 False：stdio 进程常驻，复用同一条 TCP 连接，
+    # 避免每次工具调用都断开重连（重连要扫实例目录 + 暖场 ping，最多 5s）。
     # 需要强制本次调用后关闭连接时显式传 True。
     try:
         if name == "unity_batch":
@@ -1180,7 +1328,9 @@ def _handle_impl(name: str, args: dict, close_after: bool = False) -> str:
             return json.dumps({"ok": bool(r.get("ok")), "state": r.get("message"), "error": r.get("error"),
                                "projectPath": r.get("projectPath"), "bridge": bridge_health(r.get("projectPath"))}, ensure_ascii=False)
         elif name == "unity_execute_code":
-            r = UP.call("execute_code", args["code"])
+            # 首次调用要冷启动 Roslyn（245 个引用），实测可能远超 30s；
+            # 超时会被报成「结果未知」，所以这里单独放宽到 120s
+            r = UP.call("execute_code", args["code"], timeout_s=120.0)
             if r.get("ok"):
                 return f"✅ 执行成功:\n{r.get('message', '(无输出)')}"
             return f"❌ 失败:\n{r.get('error', r.get('message', str(r)))}"
@@ -1295,7 +1445,8 @@ def install_workbuddy_config(stable_script: str, python_exe: str) -> str:
     if not isinstance(servers, dict):
         return f"❌ 现有配置的 mcpServers 不是对象，未改动：{cfg_path}"
 
-    # 沿用已有 xybridge* 条目里的 command（用户可能指定了带 pywin32 的解释器）
+    # 沿用已有 xybridge* 条目里的 command（用户可能指定了某个具体的解释器路径，
+    # 例如 pyenv / venv 里的 python3），避免每次安装都把它改回 PATH 上的默认值
     for k, v in servers.items():
         if (k == "xybridge" or k.startswith("xybridge_")) and isinstance(v, dict):
             if v.get("command"):
@@ -1328,16 +1479,19 @@ def install_workbuddy_config(stable_script: str, python_exe: str) -> str:
 
 def main(server_name: str = "yzjbridge"):
     global TOOLS
-    _p, _err = resolve_pipe()
-    if _p:
+    # 启动时只做一次「报告」，不建立连接：Unity 可能还没起来，
+    # 真正的连接推迟到第一次工具调用（UnitySocket.call 内自动 connect）。
+    _inst, _err = resolve_target()
+    if _inst:
         print(
-            f"[YZJ-MCP:{server_name}] 启动, 目标管道: {_p}, tools: {len(TOOLS)}",
+            f"[YZJ-MCP:{server_name}] 启动, 目标实例: "
+            f"{_inst.get('projectPath')} [{_endpoint(_inst)}], tools: {len(TOOLS)}",
             file=sys.stderr,
         )
     else:
         print(
             f"[YZJ-MCP:{server_name}] 启动, 未绑定目标"
-            f"（存活实例 {len(list_live_pipes())} 个）, tools: {len(TOOLS)}",
+            f"（存活实例 {len(list_instances())} 个）, tools: {len(TOOLS)}",
             file=sys.stderr,
         )
 

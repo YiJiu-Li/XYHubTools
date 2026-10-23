@@ -22,7 +22,7 @@ class PipelineTests(unittest.TestCase):
         self.descriptor = self.project / "Library/Pipeline/.unity-pipeline-port"
         self.descriptor.parent.mkdir(parents=True)
         self.write_descriptor()
-        self.pipe = m.UnityPipe("test-pipe", explicit=True)
+        self.pipe = m.UnitySocket(None, explicit=True)
         self.pipe.call = Mock(return_value={"projectPath": str(self.project)})
         self.up = patch.object(m, "UP", self.pipe)
         self.up.start()
@@ -79,7 +79,7 @@ class PipelineTests(unittest.TestCase):
         descriptor.parent.mkdir(parents=True)
         descriptor.write_text(json.dumps({"port": 7802, "evalToken": "other", "projectPath": str(other)}))
         self.pipe.call.return_value = {"projectPath": str(other)}
-        self.pipe.set_pipe("other-pipe")
+        self.pipe.set_instance({"projectPath": str(other), "host": "127.0.0.1", "port": 1})
         m.handle("unity_cli", {"spec": "editor_status"})
         self.assertIn(":7802/", self.open.call_args.args[0].full_url)
 
@@ -135,16 +135,17 @@ class PipelineTests(unittest.TestCase):
         for args in ({"limit": True}, {"limit": 201}, {"offset": -1}, {"detail": "invalid"}, {"command": "eval", "limit": 1}):
             self.assertTrue(m.handle("unity_pipeline_commands", args).is_error)
 
-    def test_project_binding_survives_pipe_loss_without_reprobing(self):
+    def test_project_binding_survives_bridge_loss_without_reprobing(self):
         m.handle("unity_pipeline", {"command": "editor_status"})
-        self.pipe.call.side_effect = AssertionError("must not probe pipe again")
+        self.pipe.call.side_effect = AssertionError("must not probe the bridge again")
         self.write_descriptor(port=7803)
         self.assertFalse(m.handle("unity_pipeline", {"command": "editor_status"}).is_error)
         self.assertIn(":7803/", self.open.call_args.args[0].full_url)
 
-    def test_absolute_project_binding_needs_no_pipe(self):
-        self.pipe.call.side_effect = AssertionError("pipe unavailable")
-        with patch.object(m, "list_live_pipes", side_effect=AssertionError("must not enumerate")):
+    def test_absolute_project_binding_needs_no_bridge(self):
+        self.pipe.call.side_effect = AssertionError("bridge unavailable")
+        # 绝对路径绑定只依赖 Pipeline 描述文件；实例枚举不到也不该失败
+        with patch.object(m, "list_instances", return_value=[]):
             result = m.cmd_use_project(str(self.project))
         self.assertIn(str(self.project), result)
         self.assertFalse(m.handle("unity_pipeline", {"command": "editor_status"}).is_error)

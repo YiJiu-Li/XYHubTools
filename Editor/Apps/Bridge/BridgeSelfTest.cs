@@ -89,8 +89,8 @@ namespace Framework.XYEditor.Bridge
                         Idx = 1,
                         Name = "unity_ping",
                         Group = "core",
-                        Run = () => PipeServer.IsRunning ? "running" : "stopped",
-                        Hint = "Named Pipe 服务是否在监听",
+                        Run = () => BridgeServer.IsRunning ? "running " + BridgeServer.Endpoint : "stopped",
+                        Hint = "本机 TCP 服务是否在监听（跨平台）",
                     },
                     new TestCase
                     {

@@ -15,12 +15,12 @@ using UnityEngine;
 
 namespace Framework.XYEditor.Bridge
 {
-    [XYTool(order: 100, tags: new[] { "MCP", "Bridge", "AI", "管道", "连接" })]
+    [XYTool(order: 100, tags: new[] { "MCP", "Bridge", "AI", "TCP", "连接" })]
     public class BridgeStatusTool : IXYEditorTool
     {
         public string ToolName => "MCP Bridge";
         public string Category => "服务";
-        public string Description => "AI MCP 桥接 — Unity 管道服务 + Codex stdio 配置";
+        public string Description => "AI MCP 桥接 — Unity 本机 TCP 服务 + Codex stdio 配置（Windows / macOS / Linux）";
         public string DocumentPath => null;
         public Texture2D Icon => EditorGUIUtility.FindTexture("d_NetworkAnimator Icon");
 
@@ -133,20 +133,20 @@ namespace Framework.XYEditor.Bridge
         }
 
         // ═══════════════════════════════════════════════════════════════
-        //  管道状态卡片
+        //  服务状态卡片
         // ═══════════════════════════════════════════════════════════════
 
         private void DrawStatusCard()
         {
-            bool running = YZJBridge.IsPipeServerRunning;
-            bool connected = YZJBridge.IsPipeConnected;
+            bool running = YZJBridge.IsServerRunning;
+            bool connected = YZJBridge.IsConnected;
 
             EditorGUILayout.BeginVertical(BridgeStyles.Card);
 
             using (new EditorGUILayout.HorizontalScope())
             {
                 GUILayout.Label(
-                    running ? "● 管道服务运行中" : "○ 管道服务已停止",
+                    running ? "● 本机服务运行中" : "○ 本机服务已停止",
                     running ? BridgeStyles.StatusOnStyle : BridgeStyles.StatusOffStyle
                 );
                 GUILayout.FlexibleSpace();
@@ -161,9 +161,21 @@ namespace Framework.XYEditor.Bridge
 
             using (new EditorGUILayout.HorizontalScope())
             {
-                GUILayout.Label("管道名", BridgeStyles.SectionLabel, GUILayout.Width(46));
-                string pipe = YZJBridge.PipeDisplayName;
-                GUILayout.Label(string.IsNullOrEmpty(pipe) ? "—" : pipe, BridgeStyles.Mono);
+                GUILayout.Label("监听地址", BridgeStyles.SectionLabel, GUILayout.Width(52));
+                string endpoint = YZJBridge.Endpoint;
+                GUILayout.Label(string.IsNullOrEmpty(endpoint) ? "—" : endpoint, BridgeStyles.Mono);
+            }
+
+            GUILayout.Space(3);
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                GUILayout.Label("实例文件", BridgeStyles.SectionLabel, GUILayout.Width(52));
+                string instance = YZJBridge.InstanceFile;
+                GUILayout.Label(
+                    string.IsNullOrEmpty(instance) ? "（未写入，MCP 将无法发现本工程）" : instance,
+                    string.IsNullOrEmpty(instance) ? BridgeStyles.Muted : BridgeStyles.Mono
+                );
             }
 
             GUILayout.Space(3);
@@ -208,11 +220,11 @@ namespace Framework.XYEditor.Bridge
 
         private void DrawControls()
         {
-            bool running = YZJBridge.IsPipeServerRunning;
+            bool running = YZJBridge.IsServerRunning;
 
             using (new EditorGUILayout.HorizontalScope())
             {
-                GUILayout.Label("管道服务", BridgeStyles.SectionLabel, GUILayout.Width(46));
+                GUILayout.Label("本机服务", BridgeStyles.SectionLabel, GUILayout.Width(52));
 
                 using (new EditorGUI.DisabledScope(running))
                 {

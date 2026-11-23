@@ -14,7 +14,7 @@ namespace XY.PipelineBootstrap
     public static class PipelineInstaller
     {
         private const string PackageName = "com.unity.pipeline";
-        private const string AttemptKey = "XY.PipelineBootstrap.Attempted";
+        private const string AttemptKeyPrefix = "XY.PipelineBootstrap.Attempted.";
 
         /// <summary>
         /// 按包名查 PackageInfo。
@@ -42,6 +42,14 @@ namespace XY.PipelineBootstrap
         private static string ProjectRoot => Path.GetDirectoryName(Application.dataPath);
         private static string RollbackDirectory => Path.Combine(ProjectRoot, "ProjectSettings", "XYBridgePipelineRollback");
         private static string ManifestPath => Path.Combine(ProjectRoot, "Packages", "manifest.json");
+        private static string AttemptKey
+        {
+            get
+            {
+                try { return AttemptKeyPrefix + ReadBundleMetadata().version; }
+                catch { return AttemptKeyPrefix + "unknown"; }
+            }
+        }
         public static string Status { get; private set; } = "等待检查 Pipeline";
 
         static PipelineInstaller()
@@ -63,6 +71,27 @@ namespace XY.PipelineBootstrap
             var existing = FindPackage(PackageName);
             if (existing != null)
             {
+                if (ShouldUpgradeManagedBundle(existing))
+                {
+                    if (SessionState.GetBool(AttemptKey, false))
+                    {
+                        DescribeInstalled(existing);
+                        return;
+                    }
+                    if (EditorApplication.isCompiling || EditorApplication.isUpdating)
+                    {
+                        EditorApplication.delayCall += Check;
+                        return;
+                    }
+                    SessionState.SetBool(AttemptKey, true);
+                    try
+                    {
+                        Status = "检测到旧版 XY Pipeline，正在升级";
+                        InstallDefault();
+                    }
+                    catch (Exception e) { Fail(e.Message); }
+                    return;
+                }
                 DescribeInstalled(existing);
                 return;
             }
@@ -127,7 +156,7 @@ namespace XY.PipelineBootstrap
 
         private static void InstallDefault()
         {
-            var metadata = JsonUtility.FromJson<Bundle>(File.ReadAllText(Path.Combine(BundleRoot(), "bundle.json")));
+            var metadata = ReadBundleMetadata();
             if (int.Parse(Application.unityVersion.Split('.')[0]) >= 6000)
             {
                 RequireUnity(metadata.upstreamUnity ?? "6000.0");
@@ -141,9 +170,7 @@ namespace XY.PipelineBootstrap
         {
             var archive = Path.Combine(BundleRoot(), "pipeline.tgz");
             if (!File.Exists(archive)) throw new FileNotFoundException("XY 工具包缺少 Pipeline~/pipeline.tgz");
-            var metadata = JsonUtility.FromJson<Bundle>(File.ReadAllText(Path.Combine(BundleRoot(), "bundle.json")));
-            if (metadata == null || metadata.name != PackageName || string.IsNullOrEmpty(metadata.version))
-                throw new InvalidDataException("Pipeline bundle.json 格式无效");
+            var metadata = ReadBundleMetadata();
             RequireUnity(metadata.unity);
             string digest;
             using (var sha = SHA256.Create())
@@ -161,8 +188,49 @@ namespace XY.PipelineBootstrap
             BeginInstall("file:" + relative);
         }
 
-        // Explicit entry points for automation. Never upgrade a project on editor startup.
-        // Official packages are left intact; UPM resolves their declared dependencies.
+        private static Bundle ReadBundleMetadata()
+        {
+            var metadata = JsonUtility.FromJson<Bundle>(File.ReadAllText(Path.Combine(BundleRoot(), "bundle.json")));
+            if (metadata == null || metadata.name != PackageName || string.IsNullOrEmpty(metadata.version) ||
+                string.IsNullOrEmpty(metadata.upstreamVersion))
+                throw new InvalidDataException("Pipeline bundle.json 格式无效");
+            return metadata;
+        }
+
+        private static bool ShouldUpgradeManagedBundle(UnityEditor.PackageManager.PackageInfo package)
+        {
+            if (package == null || package.source == PackageSource.Embedded) return false;
+            if (!IsManagedBundleReference(CurrentManifestReference())) return false;
+            var metadata = ReadBundleMetadata();
+            var targetVersion = int.Parse(Application.unityVersion.Split('.')[0]) >= 6000
+                ? metadata.upstreamVersion
+                : metadata.version;
+            return IsVersionOlder(package.version, targetVersion);
+        }
+
+        private static bool IsManagedBundleReference(string reference)
+        {
+            return !string.IsNullOrEmpty(reference) &&
+                   reference.Replace('\\', '/').StartsWith("file:XYBridge~/pipeline-", StringComparison.OrdinalIgnoreCase) &&
+                   reference.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsVersionOlder(string current, string target)
+        {
+            var currentMatch = Regex.Match(current ?? "", @"^(\d+)\.(\d+)\.(\d+)(?:-xy\.(\d+))?");
+            var targetMatch = Regex.Match(target ?? "", @"^(\d+)\.(\d+)\.(\d+)(?:-xy\.(\d+))?");
+            if (!currentMatch.Success || !targetMatch.Success) return false;
+            for (var i = 1; i <= 3; i++)
+            {
+                var comparison = int.Parse(currentMatch.Groups[i].Value).CompareTo(int.Parse(targetMatch.Groups[i].Value));
+                if (comparison != 0) return comparison < 0;
+            }
+            if (!currentMatch.Groups[4].Success || !targetMatch.Groups[4].Success) return false;
+            return int.Parse(currentMatch.Groups[4].Value) < int.Parse(targetMatch.Groups[4].Value);
+        }
+
+        // Explicit entry points for automation. Startup migration is limited to older archives
+        // created under XYBridge~; official and user-managed packages are left intact.
         public static void InstallOfficialVersion(string version)
         {
             RunExplicit(() =>
@@ -216,10 +284,16 @@ namespace XY.PipelineBootstrap
 
         private static string CurrentReference()
         {
+            var value = CurrentManifestReference();
+            if (string.IsNullOrEmpty(value)) return null;
+            return Regex.IsMatch(value, @"^\d+\.\d+\.\d+") ? PackageName + "@" + value : value;
+        }
+
+        private static string CurrentManifestReference()
+        {
             var match = Regex.Match(File.ReadAllText(ManifestPath), "\"com\\.unity\\.pipeline\"\\s*:\\s*\"([^\"]+)\"");
             if (!match.Success) return null;
-            var value = match.Groups[1].Value;
-            return Regex.IsMatch(value, @"^\d+\.\d+\.\d+") ? PackageName + "@" + value : value;
+            return match.Groups[1].Value;
         }
 
         private static void BeginInstall(string reference, bool saveRollback = true)

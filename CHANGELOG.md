@@ -5,6 +5,13 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.2.1] - 2026-11-23
+
+### 修复
+- 修复更新 XY Hub Tools 后，项目中由 XY 管理的 `0.8.0-xy.*` Pipeline 仍被无条件保留的问题；现在仅对 `file:XYBridge~/pipeline-*.tgz` 的旧版本自动升级到当前分发版。
+- 官方 UPM 包、自定义本地包和嵌入式 Pipeline 继续保持不自动覆盖，并保留升级前 manifest、lock file 与回退状态。
+- 修正文档中仍把当前兼容包写成 `0.8.0-xy.2` 的过期说明。
+
 ## [2.2.0] - 2026-11-23
 
 ### 新增

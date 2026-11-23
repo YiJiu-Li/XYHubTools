@@ -156,7 +156,8 @@ MCP Bridge 面板内可浏览当前服务的全部 Pipeline 命令，支持名�
 #### Pipeline：只引入 XY，无需 Unity CLI
 
 首次加载时，缺少 `com.unity.pipeline` 的 Unity 6 项目通过 UPM 安装固定版本官方包，
-Unity 2022.3 项目安装 XY 随附兼容包；已有 Pipeline 保留，不覆盖。依赖由 UPM
+Unity 2022.3 项目安装 XY 随附兼容包。由 XY 生成的旧版 `XYBridge~/pipeline-*.tgz`
+引用会在 XY 包升级后自动切换到新版；官方包、自定义本地包和嵌入式源码包仍保留、不覆盖。依赖由 UPM
 解析，首次安装可能需要网络。面板显示安装状态，可点 **检查 / 重试**；也可用
 `Tools > XY Hub > 检查或安装 Pipeline`。
 
@@ -174,12 +175,12 @@ MCP 直接访问目标项目的 Pipeline HTTP 服务，不再寻找或启动 `un
 重复执行命令，以免重复修改资源。Pipeline 失败结果会返回 MCP `isError: true`。
 旧 `unity_cli` 名称仅作为兼容入口，不支持 CLI 自身的全局选项或 Player 目标选择。
 
-当前兼容包为 `0.8.0-xy.2`，由校验过的官方原包加独立补丁重建，已验证 Unity 2022.3.53f1。
+当前兼容包为 `1.0.1-xy.1`，由校验过的官方 `1.0.1` 原包加独立补丁重建，已验证 Unity 2022.3.53f1。
 Unity 6 官方路线需在对应编辑器中单独验收。Bridge 只需 Python 3.8+ 标准库，不需要 pywin32。更新包后需更新 MCP 脚本并
 重启 MCP 服务，才能使用新入口。
 
 团队项目请一并提交自动生成的 `Packages/XYBridge~/`、`Packages/manifest.json`
-和 `Packages/packages-lock.json`。已有 Pipeline 不自动升级；升级随附版本的方法见
+和 `Packages/packages-lock.json`。非 XY 管理的已有 Pipeline 不自动升级；显式升级方法见
 [Pipeline 分发说明](Pipeline~/README.md)。
 
 #### 配置只写一次（Hub 模式）

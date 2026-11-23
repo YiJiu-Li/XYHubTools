@@ -26,7 +26,7 @@ import json, os, re, sys, time, threading, math, hashlib, socket
 import urllib.request, urllib.error, urllib.parse
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-SERVER_VERSION = "2.2.0"
+SERVER_VERSION = "2.2.1"
 with open(__file__, "rb") as _script_file:
     RUNNING_SCRIPT_SHA256 = hashlib.sha256(_script_file.read()).hexdigest()
 

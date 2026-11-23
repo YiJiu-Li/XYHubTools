@@ -26,7 +26,7 @@ import json, os, re, sys, time, threading, math, hashlib, socket
 import urllib.request, urllib.error, urllib.parse
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-SERVER_VERSION = "2.1.0"
+SERVER_VERSION = "2.2.0"
 with open(__file__, "rb") as _script_file:
     RUNNING_SCRIPT_SHA256 = hashlib.sha256(_script_file.read()).hexdigest()
 
@@ -605,7 +605,10 @@ def run_pipeline_tool(name, args):
                     query[key] = value
             ok, result = pipeline_request("/api/commands?" + urllib.parse.urlencode(query), timeout_s=timeout)
             if ok and command:
-                matches = [c for c in result.get("commands", []) if c.get("name") == command]
+                # Pipeline 1.0 separates the fully-qualified command ("editor status")
+                # from its group-local name ("status"). Older releases used name for both.
+                matches = [c for c in result.get("commands", [])
+                           if c.get("command") == command or c.get("name") == command]
                 if not matches:
                     ok, result = False, {"error": "未知 Pipeline 命令: " + command}
                 else:
@@ -984,13 +987,13 @@ ALL_TOOLS = [
     {
         "name": "unity_cli",
         "description": (
-            "直接调用 Pipeline HTTP，无需安装 Unity CLI；兼容原有命令字符串入口"
-            "（构建、测试、烘焙、动画、Project Settings、包管理、run_script 热更等），"
+            "直接调用 Pipeline HTTP，无需安装 Unity CLI；兼容命令字符串入口"
+            "（构建、测试、烘焙、动画、Project Settings、包管理、script run 热更等），"
             "走 HTTP 回环，与本 Bridge 的本机 TCP 通道互不影响。"
-            "spec 写「命令名 参数...」，例：'editor_status'、'recompile'、"
-            "'eval \"return 1+1;\"'、'get_scene_hierarchy --path Assets/Scenes/Main.unity'、"
-            "'set_autotick --enable true'。留空则列出全部可用命令。"
-            "异步命令（recompile / build / run_tests / *_bake）需要轮询对应的 *_status。"
+            "Pipeline 1.0 spec 写「分组命令 参数...」，例：'editor status'、'editor recompile'、"
+            "'script eval --code \"return 1+1;\"'、'scene get_hierarchy --path Assets/Scenes/Main.unity'、"
+            "'editor set_auto_tick --enabled true'。留空则列出全部可用命令。"
+            "异步命令需要按实时 Schema 轮询对应的状态命令。"
         ),
         "inputSchema": {
             "type": "object",

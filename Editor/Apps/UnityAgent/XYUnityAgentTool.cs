@@ -138,20 +138,4 @@ namespace Framework.XYEditor.Agent
         }
     }
 
-    public sealed class XYUnityAgentWindow : EditorWindow
-    {
-        private XYUnityAgentTool _tool;
-
-        [MenuItem("XY Tools/AI/XY Unity 智能体")]
-        public static void Open()
-        {
-            var window = GetWindow<XYUnityAgentWindow>("XY Unity 智能体");
-            window.minSize = new Vector2(480, 500);
-            window.Show();
-        }
-
-        private void OnEnable() { _tool = new XYUnityAgentTool(); _tool.OnEnable(); }
-        private void OnDisable() => _tool?.OnDisable();
-        private void OnGUI() => _tool?.OnGUI(new Rect(0, 0, position.width, position.height));
-    }
 }

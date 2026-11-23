@@ -5,6 +5,30 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.2.0] - 2026-11-23
+
+### 新增
+- XY 随附 Pipeline 升级到官方 `1.0.1` 的 Unity 2022.3 兼容分发版 `1.0.1-xy.1`，保留官方包结构、许可证和版本来源；补充发行包重建、HTTP 协议与独立验收检查。
+- Shader 库升级为通用资源库：切换 `/api/assets/*`，支持任意文本与二进制资源按原始字节下载，默认保留目录结构并写入 `Assets/ResourceLibrary`。
+- 资源下载在首次导入前为每个目标路径确定本地 GUID，保留 `.meta` 导入设置，并修正资源内容及 `.meta` 内部引用。
+- `xy-unity-agent` 增加 Rokid 点位资源隔离、运行时脚本挂载、Prefab 预建节点、AR 相机展示、UXR 手势参考与 Android 宏约束；`xy-unity-shader` 增加点位到渲染专项的交接边界。
+
+### 调整
+- 智能体技能保留 Unity/Rokid 与 Shader/VFX 两项；移除未使用的桌面 Agent 专项。
+- 移除 `XY Tools/AI/XY Unity 智能体` 独立窗口菜单，只保留 XY 编辑器 Hub 内的 AI 分类入口。
+- CodeGraph 不可用、索引过期或结果不足时立即回退源码搜索；简单材质问题不再强制执行完整平台与性能盘点。
+
+### 修复
+- 修复资源库把二进制文件按 UTF-8 文本写入导致资源损坏的问题。
+- 修复服务器不同目录存在重复 GUID 时，引用被单值字典覆盖并关联到错误路径的问题；现在按来源目录选择候选并生成独立本地 GUID。
+- 修复目标 `.meta` 的 GUID 已属于项目其他路径时仍继续复用的问题。
+- Rokid 手势真机订阅、轮询和骨骼读取明确使用 Android 条件编译；非 Android Player 安全降级，不再由裸 `#else` 误入真机路径。
+
+### 验证
+- MCP/Pipeline Python 自动测试 71 项、智能体分发测试 6 项通过。
+- Pipeline `1.0.1-xy.1` 在线验收通过：命令分类、分页发现、完整 Schema、结构化执行、错误传播和后台任务结果。
+- Unity 2022.3.53f1 编译完成；资源库、智能体安装状态与重复 GUID 路径映射已读回验证。
+
 ## [2.1.0] - 2026-10-23
 
 ### 新增

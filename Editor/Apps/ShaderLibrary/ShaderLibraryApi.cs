@@ -1,4 +1,4 @@
-// ShaderLibraryApi.cs — XY ShaderLibrary HTTP 客户端
+// ShaderLibraryApi.cs — XY Asset Library HTTP 客户端（类名保留兼容旧代码）
 // 对接 http://310007.xyz:17851 接口，所有调用均为同步阻塞式（适合 Editor 工具）。
 
 using System;
@@ -9,7 +9,7 @@ using System.Text;
 namespace Framework.XYEditor.ShaderLibrary
 {
     /// <summary>
-    /// XY ShaderLibrary REST API 封装。
+    /// XY Asset Library REST API 封装。
     /// 所有方法均返回 <see cref="ApiResult"/>，不抛异常。
     /// </summary>
     public static class ShaderLibraryApi
@@ -20,6 +20,14 @@ namespace Framework.XYEditor.ShaderLibrary
             public bool Success;
             public string Data; // 响应体原文
             public string Error; // 错误描述（Success=false 时有效）
+        }
+
+        public struct BinaryApiResult
+        {
+            public bool Success;
+            public byte[] Data;
+            public string ContentType;
+            public string Error;
         }
 
         // ═══════════════════════════════════════════════════════════════════
@@ -83,6 +91,51 @@ namespace Framework.XYEditor.ShaderLibrary
         private static ApiResult Post(string url, string body, string token = null) =>
             Request(url, "POST", body, token);
 
+        private static BinaryApiResult GetBytes(string url, string token = null)
+        {
+            try
+            {
+                var req = (HttpWebRequest)WebRequest.Create(url);
+                req.Method = "GET";
+                req.Accept = "application/octet-stream";
+                req.Timeout = 30000;
+
+                if (!string.IsNullOrEmpty(token))
+                    req.Headers["authorization"] = "Bearer " + token;
+
+                using var resp = (HttpWebResponse)req.GetResponse();
+                using var stream = resp.GetResponseStream();
+                using var memory = new MemoryStream();
+                stream.CopyTo(memory);
+                return new BinaryApiResult
+                {
+                    Success = true,
+                    Data = memory.ToArray(),
+                    ContentType = resp.ContentType,
+                };
+            }
+            catch (WebException ex) when (ex.Response is HttpWebResponse errResp)
+            {
+                try
+                {
+                    using var reader = new StreamReader(errResp.GetResponseStream(), Encoding.UTF8);
+                    return new BinaryApiResult
+                    {
+                        Success = false,
+                        Error = $"HTTP {(int)errResp.StatusCode}: {reader.ReadToEnd()}",
+                    };
+                }
+                catch
+                {
+                    return new BinaryApiResult { Success = false, Error = ex.Message };
+                }
+            }
+            catch (Exception e)
+            {
+                return new BinaryApiResult { Success = false, Error = e.Message };
+            }
+        }
+
         // ═══════════════════════════════════════════════════════════════════
         //  Auth
         // ═══════════════════════════════════════════════════════════════════
@@ -97,17 +150,24 @@ namespace Framework.XYEditor.ShaderLibrary
             Post($"{baseUrl}/api/auth/logout", "{}", token);
 
         // ═══════════════════════════════════════════════════════════════════
-        //  Shaders
+        //  Assets
         // ═══════════════════════════════════════════════════════════════════
 
         public static ApiResult GetTree(string baseUrl, string token) =>
-            Get($"{baseUrl}/api/shaders/tree", token);
+            Get($"{baseUrl}/api/assets/tree", token);
 
         public static ApiResult GetContent(string baseUrl, string token, string path) =>
-            Get($"{baseUrl}/api/shaders/content?path={Uri.EscapeDataString(path)}", token);
+            Get($"{baseUrl}/api/assets/content?path={Uri.EscapeDataString(path)}", token);
+
+        /// <summary>按原始字节下载资源，不对扩展名或内容类型做限制。</summary>
+        public static BinaryApiResult GetRaw(string baseUrl, string token, string path) =>
+            GetBytes(
+                $"{baseUrl}/api/assets/raw?path={Uri.EscapeDataString(path)}&download=true",
+                token
+            );
 
         public static ApiResult GetMetadata(string baseUrl, string token) =>
-            Get($"{baseUrl}/api/shaders/metadata", token);
+            Get($"{baseUrl}/api/assets/metadata", token);
 
         // ═══════════════════════════════════════════════════════════════════
         //  Health

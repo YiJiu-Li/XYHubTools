@@ -1,6 +1,6 @@
 """Verify the MCP/official HTTP contract against an open Unity project.
 
-Only discovers commands, reads editor status and submits an editor_status job.
+Only discovers commands, reads editor status and submits an editor status job.
 Does not alter scenes, assets or packages. Nonzero exit means upgrade not verified.
 """
 import argparse
@@ -13,6 +13,7 @@ import xy_mcp_server as m
 def verify(project):
     m._PROJECT_ARG = str(Path(project).resolve())
     checks = []
+    status_command = "editor status"
 
     def call(name, args):
         result = m.run_pipeline_tool(name, args)
@@ -27,17 +28,23 @@ def verify(project):
     assert len(page["commands"]) <= 1 and isinstance(page.get("total"), int), "Missing filter/pagination support"
     assert all("schema" not in c for c in page["commands"]), "Compact discovery returned full schemas"
     checks.append("compact_discovery_and_pagination")
-    command = call("unity_pipeline_commands", {"command": "editor_status"})
-    assert len(command["commands"]) == 1 and command["commands"][0]["name"] == "editor_status"
-    assert "schema" in command["commands"][0], "Missing command schema"
-    checks.append("exact_command_schema")
-    status = call("unity_pipeline", {"command": "editor_status"})
+    command = call("unity_pipeline_commands", {"command": status_command})
+    assert len(command["commands"]) == 1 and (
+        command["commands"][0].get("command") == status_command or
+        command["commands"][0].get("name") == status_command
+    )
+    status_schema = command["commands"][0]
+    assert "schema" in status_schema, "Missing command schema"
+    assert status_schema.get("readOnly") is True, "editor status is not marked read-only"
+    assert status_schema.get("destructive") is False, "editor status is incorrectly marked destructive"
+    checks.append("exact_command_schema_and_effect")
+    status = call("unity_pipeline", {"command": status_command})
     assert isinstance(status.get("result"), dict), "Status is not a JSON object"
     checks.append("structured_execution")
     unknown = m.run_pipeline_tool("unity_pipeline", {"command": "__xy_contract_missing_command__"})
     assert unknown.is_error, "Failed command did not set MCP isError"
     checks.append("error_propagation")
-    job = call("unity_pipeline", {"command": "editor_status", "job": True})["xyJob"]
+    job = call("unity_pipeline", {"command": status_command, "job": True})["xyJob"]
     deadline = time.monotonic() + 30
     while True:
         state = call("unity_pipeline_job", {"job": job, "timeout": 5})

@@ -78,7 +78,7 @@ namespace Framework.XYEditor.Agent
 
         public static string ProjectRoot => Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
         public static string InstallPath => Path.Combine(ProjectRoot, ".agents", "skills", SkillId);
-        private static readonly string[] SupportedSkills = { SkillId, "xy-unity-shader", "xy-agent-desktop-dev" };
+        private static readonly string[] SupportedSkills = { SkillId, "xy-unity-shader" };
 
         private static string SkillPath(string id) => Path.Combine(ProjectRoot, ".agents", "skills", id);
         private static string SkillOwner(string id) => "com.yzj.xyhubtools/" + id;

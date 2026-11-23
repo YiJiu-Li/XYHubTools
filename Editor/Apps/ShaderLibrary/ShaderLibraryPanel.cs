@@ -1,4 +1,4 @@
-﻿// ShaderLibraryPanel.cs — XY Shader 库面板（分组下载）
+﻿// ShaderLibraryPanel.cs — XY 资源库面板（分组下载）
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -10,7 +10,7 @@ namespace Framework.XYEditor.ShaderLibrary
 {
     public class ShaderLibraryPanel : IXYPanel
     {
-        // ── EditorPrefs 键 ────────────────────────────────────────────────
+        // ── EditorPrefs 键（沿用旧名，保留已有服务器、登录与目录设置） ──
         private const string PREF_URL = "XYShaderLib_URL";
         private const string PREF_TOKEN = "XYShaderLib_Token";
         private const string PREF_USER = "XYShaderLib_User";
@@ -29,13 +29,14 @@ namespace Framework.XYEditor.ShaderLibrary
 
         // ── 下载 ──────────────────────────────────────────────────────────
         private List<DownloadGroup> _downloadGroups = new();
-        private string _downloadTargetDir = "Assets/ShaderLibrary";
-        private bool _preserveStructure = false;
+        private string _downloadTargetDir = "Assets/ResourceLibrary";
+        private bool _preserveStructure = true;
         private bool _resolveDependencies = true;
         private Vector2 _downloadScroll;
         private Vector2 _downloadLogScroll;
         private List<string> _downloadLog = new();
         private HashSet<string> _allFilePaths = new();
+        private HashSet<string> _textFilePaths = new(StringComparer.OrdinalIgnoreCase);
 
         // ── 状态栏 ────────────────────────────────────────────────────────
         private string _statusMsg = "";
@@ -50,8 +51,11 @@ namespace Framework.XYEditor.ShaderLibrary
         {
             public string key = "";
             public string type = "";
+            public string kind = "";
             public List<ShaderNode> children = new();
             public bool IsDir => type == "dir" || type == "directory" || type == "folder";
+            public bool IsText =>
+                kind == "text" || key.EndsWith(".meta", StringComparison.OrdinalIgnoreCase);
         }
 
         [Serializable]
@@ -68,7 +72,13 @@ namespace Framework.XYEditor.ShaderLibrary
             public bool Expanded;
         }
 
-        // Unity 内置 include 白名单（跳过不在 Shader 库中的系统文件）
+        private class GuidCandidate
+        {
+            public string ServerPath = "";
+            public string LocalGuid = "";
+        }
+
+        // 文本资源可选解析 #include；Unity 内置 include 不属于远程资源库，直接跳过。
         private static readonly HashSet<string> BuiltinIncludes = new HashSet<string>(
             new[]
             {
@@ -107,7 +117,7 @@ namespace Framework.XYEditor.ShaderLibrary
             _token = EditorPrefs.GetString(PREF_TOKEN, "");
             _currentUser = EditorPrefs.GetString(PREF_USER, "");
             _currentRole = EditorPrefs.GetString(PREF_ROLE, "");
-            _downloadTargetDir = EditorPrefs.GetString(PREF_DOWNLOAD_DIR, "Assets/ShaderLibrary");
+            _downloadTargetDir = EditorPrefs.GetString(PREF_DOWNLOAD_DIR, "Assets/ResourceLibrary");
 
             if (!string.IsNullOrEmpty(_token))
             {
@@ -138,7 +148,7 @@ namespace Framework.XYEditor.ShaderLibrary
 
             if (!IsLoggedIn)
             {
-                EditorGUILayout.HelpBox("请先登录以访问 Shader 库。", MessageType.Info);
+                EditorGUILayout.HelpBox("请先登录以访问资源库。", MessageType.Info);
                 return;
             }
 
@@ -441,8 +451,12 @@ namespace Framework.XYEditor.ShaderLibrary
                     }
                     _preserveStructure = EditorGUILayout.Toggle("保留目录结构", _preserveStructure);
                     _resolveDependencies = EditorGUILayout.Toggle(
-                        "解析 #include 依赖",
+                        "解析文本 #include 依赖",
                         _resolveDependencies
+                    );
+                    EditorGUILayout.HelpBox(
+                        "所有文件类型都会按原始字节下载；#include 解析只作用于服务器标记为文本的资源。",
+                        MessageType.None
                     );
                 }
             );
@@ -519,8 +533,8 @@ namespace Framework.XYEditor.ShaderLibrary
                 return;
             }
 
-            // BFS：下载内容并解析 #include 依赖
-            var contentCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            // BFS：所有资源按原始字节下载；文本资源可继续解析 #include 依赖。
+            var contentCache = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
             var queue = new Queue<string>(fileSet);
             var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -532,7 +546,7 @@ namespace Framework.XYEditor.ShaderLibrary
                 visited.Add(path);
 
                 SetStatus($"正在获取：{path}");
-                var r = ShaderLibraryApi.GetContent(_baseUrl, _token, path);
+                var r = ShaderLibraryApi.GetRaw(_baseUrl, _token, path);
                 if (!r.Success)
                 {
                     // .meta 文件在服务器上不存在时静默跳过（非致命）
@@ -540,7 +554,7 @@ namespace Framework.XYEditor.ShaderLibrary
                         _downloadLog.Add($"❌ 获取失败：{path}（{r.Error}）");
                     continue;
                 }
-                string content = ShaderLibraryApi.ExtractString(r.Data, "content") ?? r.Data;
+                byte[] content = r.Data ?? Array.Empty<byte>();
                 contentCache[path] = content;
 
                 bool isBase = fileSet.Contains(path);
@@ -554,8 +568,8 @@ namespace Framework.XYEditor.ShaderLibrary
                         queue.Enqueue(metaPath);
                 }
 
-                if (_resolveDependencies)
-                    foreach (string inc in ExtractIncludes(content))
+                if (_resolveDependencies && TryDecodeText(path, content, out string text))
+                    foreach (string inc in ExtractIncludes(text))
                     {
                         string resolved = ResolveToKnownPath(path, inc);
                         if (resolved != null && !visited.Contains(resolved))
@@ -573,24 +587,76 @@ namespace Framework.XYEditor.ShaderLibrary
                     absTarget.Replace('/', Path.DirectorySeparatorChar)
                 );
 
-            // ── 阶段 1：从服务端 .meta 提取 serverGuid → 主体文件路径 ──────
-            // 例：serverGuid "42ad40a7..." → "Shaders/SubGraph.shadersubgraph"
-            var serverGuidToServerPath = new Dictionary<string, string>(
+            // ── 阶段 1：为每个目标路径预先确定本地 GUID ───────────────────
+            // 同一个 serverGuid 可能出现在多个库路径，不能用单值字典覆盖。
+            var guidCandidates = new Dictionary<string, List<GuidCandidate>>(
                 StringComparer.OrdinalIgnoreCase
             );
             foreach (var kvp in contentCache)
             {
                 if (!kvp.Key.EndsWith(".meta", StringComparison.OrdinalIgnoreCase))
                     continue;
-                string guid = ExtractMetaGuid(kvp.Value);
-                if (!string.IsNullOrEmpty(guid))
-                    serverGuidToServerPath[guid] = kvp.Key.Substring(0, kvp.Key.Length - 5);
+                if (!TryDecodeText(kvp.Key, kvp.Value, out string metaContent))
+                    continue;
+                string serverGuid = ExtractMetaGuid(metaContent);
+                if (string.IsNullOrEmpty(serverGuid))
+                    continue;
+
+                string serverPath = kvp.Key.Substring(0, kvp.Key.Length - 5);
+                string localRel = _preserveStructure
+                    ? serverPath
+                    : Path.GetFileName(serverPath);
+                string localAbs = Path.Combine(
+                    absTarget,
+                    localRel.Replace('/', Path.DirectorySeparatorChar)
+                );
+                string localMetaAbs = localAbs + ".meta";
+                string localGuid = null;
+                if (File.Exists(localMetaAbs))
+                    localGuid = ExtractMetaGuid(
+                        File.ReadAllText(localMetaAbs, System.Text.Encoding.UTF8)
+                    );
+
+                string projectRelative = FileUtil.GetProjectRelativePath(
+                    localAbs.Replace('\\', '/')
+                );
+                string currentOwner = string.IsNullOrEmpty(localGuid)
+                    ? ""
+                    : AssetDatabase.GUIDToAssetPath(localGuid);
+                if (
+                    !string.IsNullOrEmpty(currentOwner)
+                    && !string.Equals(
+                        currentOwner,
+                        projectRelative,
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                )
+                {
+                    _downloadLog.Add(
+                        $"⚠️ 目标 .meta 的 GUID 已属于其他资源，重新生成：{serverPath}"
+                    );
+                    localGuid = null;
+                }
+
+                if (string.IsNullOrEmpty(localGuid))
+                    localGuid = System.Guid.NewGuid().ToString("N");
+
+                if (!guidCandidates.TryGetValue(serverGuid, out var candidates))
+                {
+                    candidates = new List<GuidCandidate>();
+                    guidCandidates[serverGuid] = candidates;
+                }
+                candidates.Add(
+                    new GuidCandidate { ServerPath = serverPath, LocalGuid = localGuid }
+                );
             }
 
-            // ── 阶段 2：只写非 .meta 文件，让 Unity 自己生成本地 .meta ─────
+            // ── 阶段 2：首次导入前修正引用，并写入带本地 GUID 的 .meta ─────
             int success = 0,
                 skipped = 0,
                 failed = 0;
+            int patched = 0,
+                metaWritten = 0;
             bool anyWritten = false;
             foreach (var kvp in contentCache)
             {
@@ -604,18 +670,86 @@ namespace Framework.XYEditor.ShaderLibrary
                 try
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(localAbs));
+                    byte[] outputBytes = kvp.Value;
+                    if (TryDecodeText(kvp.Key, kvp.Value, out string originalContent))
+                    {
+                        string patchedContent = PatchGuidsForPath(
+                            originalContent,
+                            kvp.Key,
+                            guidCandidates,
+                            out var ambiguousGuids
+                        );
+                        if (patchedContent != originalContent)
+                        {
+                            outputBytes = new System.Text.UTF8Encoding(false).GetBytes(
+                                patchedContent
+                            );
+                            patched++;
+                        }
+                        foreach (string ambiguousGuid in ambiguousGuids)
+                            _downloadLog.Add(
+                                $"⚠️ 重复服务器 GUID 已按最近目录映射：{kvp.Key} ({ambiguousGuid})"
+                            );
+                    }
+
+                    bool assetChanged = true;
                     if (File.Exists(localAbs))
                     {
-                        string existing = File.ReadAllText(localAbs, System.Text.Encoding.UTF8);
-                        if (existing == kvp.Value)
+                        byte[] existing = File.ReadAllBytes(localAbs);
+                        assetChanged = !BytesEqual(existing, outputBytes);
+                    }
+                    if (assetChanged)
+                    {
+                        File.WriteAllBytes(localAbs, outputBytes);
+                        success++;
+                        anyWritten = true;
+                    }
+                    else
+                        skipped++;
+
+                    string serverMetaPath = kvp.Key + ".meta";
+                    if (
+                        contentCache.TryGetValue(serverMetaPath, out byte[] serverMetaBytes)
+                        && TryDecodeText(serverMetaPath, serverMetaBytes, out string serverMeta)
+                    )
+                    {
+                        string serverGuid = ExtractMetaGuid(serverMeta);
+                        GuidCandidate candidate = FindCandidateForPath(
+                            guidCandidates,
+                            serverGuid,
+                            kvp.Key
+                        );
+                        if (candidate != null)
                         {
-                            skipped++;
-                            continue;
+                            string patchedMeta = PatchGuidsForPath(
+                                serverMeta,
+                                kvp.Key,
+                                guidCandidates,
+                                out var metaAmbiguousGuids
+                            );
+                            foreach (string ambiguousGuid in metaAmbiguousGuids)
+                                _downloadLog.Add(
+                                    $"⚠️ .meta 重复服务器 GUID 已按最近目录映射：{kvp.Key} ({ambiguousGuid})"
+                                );
+                            string localMeta = ReplaceMetaGuid(
+                                patchedMeta,
+                                candidate.LocalGuid
+                            );
+                            string localMetaAbs = localAbs + ".meta";
+                            byte[] localMetaBytes = new System.Text.UTF8Encoding(false).GetBytes(
+                                localMeta
+                            );
+                            bool metaChanged =
+                                !File.Exists(localMetaAbs)
+                                || !BytesEqual(File.ReadAllBytes(localMetaAbs), localMetaBytes);
+                            if (metaChanged)
+                            {
+                                File.WriteAllBytes(localMetaAbs, localMetaBytes);
+                                metaWritten++;
+                                anyWritten = true;
+                            }
                         }
                     }
-                    File.WriteAllText(localAbs, kvp.Value, System.Text.Encoding.UTF8);
-                    success++;
-                    anyWritten = true;
                 }
                 catch (Exception ex)
                 {
@@ -624,79 +758,61 @@ namespace Framework.XYEditor.ShaderLibrary
                 }
             }
 
-            // ── 阶段 3：Refresh，让 Unity 为新文件生成本地 GUID ────────────
+            // ── 阶段 3：文件与 .meta 全部准备完毕后再让 Unity 导入 ───────
             string targetFwd = absTarget.Replace('\\', '/');
             string dataFwd = Application.dataPath.Replace('\\', '/');
             bool inAssets = targetFwd.StartsWith(dataFwd);
             if (inAssets && anyWritten)
                 AssetDatabase.Refresh();
 
-            // ── 阶段 4：读取本地 .meta，建立 serverGuid → localGuid 映射 ──
-            var guidRemap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var kv in serverGuidToServerPath)
-            {
-                string serverGuid = kv.Key;
-                string serverFilePath = kv.Value;
-                string localRel = _preserveStructure
-                    ? serverFilePath
-                    : Path.GetFileName(serverFilePath);
-                string localMetaAbs =
-                    Path.Combine(absTarget, localRel.Replace('/', Path.DirectorySeparatorChar))
-                    + ".meta";
-                if (!File.Exists(localMetaAbs))
-                    continue;
-                string localGuid = ExtractMetaGuid(
-                    File.ReadAllText(localMetaAbs, System.Text.Encoding.UTF8)
-                );
-                if (string.IsNullOrEmpty(localGuid) || localGuid == serverGuid)
-                    continue;
-                guidRemap[serverGuid] = localGuid;
-                _downloadLog.Add(
-                    $"🔁 {Path.GetFileName(serverFilePath)}: {serverGuid} → {localGuid}"
-                );
-            }
-
-            // ── 阶段 5：用本地 GUID 替换所有 shader 文件内的引用 ───────────
-            int patched = 0;
-            if (guidRemap.Count > 0)
-            {
-                foreach (var kvp in contentCache)
-                {
-                    if (kvp.Key.EndsWith(".meta", StringComparison.OrdinalIgnoreCase))
-                        continue;
-                    string patchedContent = PatchGuids(kvp.Value, guidRemap);
-                    if (patchedContent == kvp.Value)
-                        continue;
-                    string localRel = _preserveStructure ? kvp.Key : Path.GetFileName(kvp.Key);
-                    string localAbs = Path.Combine(
-                        absTarget,
-                        localRel.Replace('/', Path.DirectorySeparatorChar)
-                    );
-                    try
-                    {
-                        File.WriteAllText(localAbs, patchedContent, System.Text.Encoding.UTF8);
-                        patched++;
-                        _downloadLog.Add($"✏️ GUID 已修正：{kvp.Key}");
-                    }
-                    catch (Exception ex)
-                    {
-                        _downloadLog.Add($"❌ GUID 修正失败：{kvp.Key}（{ex.Message}）");
-                    }
-                }
-                if (inAssets && patched > 0)
-                    AssetDatabase.Refresh();
-            }
-
             string summary =
                 $"✅ 完成：{success} 更新，{skipped} 无变化，{failed} 失败"
                 + (patched > 0 ? $"，{patched} 个文件 GUID 已修正" : "")
+                + (metaWritten > 0 ? $"，{metaWritten} 个 .meta 已本地化" : "")
                 + $"（共 {contentCache.Count} 个）";
             _downloadLog.Add("─────────────────────────────");
             _downloadLog.Add(summary);
             SetStatus(summary, failed > 0);
         }
 
-        // ── #include 解析 ────────────────────────────────────────────────
+        // ── 内容类型与文本处理 ──────────────────────────────────────────
+
+        private bool TryDecodeText(string path, byte[] bytes, out string text)
+        {
+            text = null;
+            if (
+                !_textFilePaths.Contains(path)
+                && !path.EndsWith(".meta", StringComparison.OrdinalIgnoreCase)
+            )
+                return false;
+            try
+            {
+                text = new System.Text.UTF8Encoding(false, true).GetString(
+                    bytes ?? Array.Empty<byte>()
+                );
+                if (text.Length > 0 && text[0] == '\uFEFF')
+                    text = text.Substring(1);
+                return true;
+            }
+            catch (System.Text.DecoderFallbackException)
+            {
+                return false;
+            }
+        }
+
+        private static bool BytesEqual(byte[] left, byte[] right)
+        {
+            if (ReferenceEquals(left, right))
+                return true;
+            if (left == null || right == null || left.Length != right.Length)
+                return false;
+            for (int i = 0; i < left.Length; i++)
+                if (left[i] != right[i])
+                    return false;
+            return true;
+        }
+
+        // ── #include 与 GUID 解析 ────────────────────────────────────────
 
         private static string ExtractMetaGuid(string metaContent)
         {
@@ -708,12 +824,100 @@ namespace Framework.XYEditor.ShaderLibrary
             return m.Success ? m.Groups[1].Value : null;
         }
 
-        /// <summary>将文件内容中所有 serverGuid 替换为对应的 localGuid。</summary>
-        private static string PatchGuids(string content, Dictionary<string, string> remap)
+        private static string ReplaceMetaGuid(string metaContent, string localGuid)
         {
-            foreach (var kv in remap)
-                content = content.Replace(kv.Key, kv.Value);
+            return Regex.Replace(
+                metaContent,
+                @"^guid:\s*[a-f0-9]{32}\s*$",
+                "guid: " + localGuid,
+                RegexOptions.Multiline | RegexOptions.IgnoreCase
+            );
+        }
+
+        private static GuidCandidate FindCandidateForPath(
+            Dictionary<string, List<GuidCandidate>> candidatesByGuid,
+            string serverGuid,
+            string sourcePath
+        )
+        {
+            if (
+                string.IsNullOrEmpty(serverGuid)
+                || !candidatesByGuid.TryGetValue(serverGuid, out var candidates)
+                || candidates.Count == 0
+            )
+                return null;
+
+            GuidCandidate best = candidates[0];
+            int bestScore = CommonDirectoryPrefixLength(sourcePath, best.ServerPath);
+            for (int i = 1; i < candidates.Count; i++)
+            {
+                int score = CommonDirectoryPrefixLength(sourcePath, candidates[i].ServerPath);
+                if (
+                    score > bestScore
+                    || (
+                        score == bestScore
+                        && string.Compare(
+                            candidates[i].ServerPath,
+                            best.ServerPath,
+                            StringComparison.OrdinalIgnoreCase
+                        ) < 0
+                    )
+                )
+                {
+                    best = candidates[i];
+                    bestScore = score;
+                }
+            }
+            return best;
+        }
+
+        private static string PatchGuidsForPath(
+            string content,
+            string sourcePath,
+            Dictionary<string, List<GuidCandidate>> candidatesByGuid,
+            out List<string> ambiguousGuids
+        )
+        {
+            ambiguousGuids = new List<string>();
+            foreach (var kv in candidatesByGuid)
+            {
+                GuidCandidate candidate = FindCandidateForPath(
+                    candidatesByGuid,
+                    kv.Key,
+                    sourcePath
+                );
+                if (candidate == null)
+                    continue;
+                string pattern =
+                    @"(?<![a-f0-9])" + Regex.Escape(kv.Key) + @"(?![a-f0-9])";
+                if (!Regex.IsMatch(content, pattern, RegexOptions.IgnoreCase))
+                    continue;
+                if (kv.Value.Count > 1)
+                    ambiguousGuids.Add(kv.Key);
+                content = Regex.Replace(
+                    content,
+                    pattern,
+                    candidate.LocalGuid,
+                    RegexOptions.IgnoreCase
+                );
+            }
             return content;
+        }
+
+        private static int CommonDirectoryPrefixLength(string leftPath, string rightPath)
+        {
+            string leftDir = (Path.GetDirectoryName(leftPath) ?? "").Replace('\\', '/');
+            string rightDir = (Path.GetDirectoryName(rightPath) ?? "").Replace('\\', '/');
+            string[] left = leftDir.Split('/');
+            string[] right = rightDir.Split('/');
+            int count = Math.Min(left.Length, right.Length);
+            int matched = 0;
+            while (
+                matched < count
+                && string.Equals(left[matched], right[matched], StringComparison.OrdinalIgnoreCase)
+            )
+                matched++;
+            return matched;
         }
 
         // ── #include 解析 ────────────────────────────────────────────────
@@ -783,6 +987,7 @@ namespace Framework.XYEditor.ShaderLibrary
         private void CollectAllFilePaths(List<ShaderNode> nodes)
         {
             _allFilePaths.Clear();
+            _textFilePaths.Clear();
             foreach (var n in nodes)
                 CollectPathsRecursive(n);
         }
@@ -790,7 +995,11 @@ namespace Framework.XYEditor.ShaderLibrary
         private void CollectPathsRecursive(ShaderNode n)
         {
             if (!n.IsDir)
+            {
                 _allFilePaths.Add(n.key);
+                if (n.IsText)
+                    _textFilePaths.Add(n.key);
+            }
             if (n.children != null)
                 foreach (var c in n.children)
                     CollectPathsRecursive(c);

@@ -55,6 +55,35 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse(result.is_error)
         self.assertEqual(json.loads(self.open.call_args.args[0].data)["parameters"], params)
 
+    def test_grouped_command_and_kebab_case_parameters_are_transmitted_unchanged(self):
+        params = {"output-path": "Temp/result.json", "omit-nulls": True}
+        result = m.handle("unity_pipeline", {"command": "editor status", "parameters": params})
+        self.assertFalse(result.is_error)
+        payload = json.loads(self.open.call_args.args[0].data)
+        self.assertEqual(payload["command"], "editor status")
+        self.assertEqual(payload["parameters"], params)
+
+    def test_command_effect_metadata_is_preserved(self):
+        effect = {"readOnly": False, "destructive": True, "idempotent": False}
+        self.reply({"commands": [{"command": "asset delete", "name": "delete", **effect, "schema": {}}]})
+        result = json.loads(m.handle("unity_pipeline_commands", {"command": "asset delete"}))
+        self.assertEqual({key: result["commands"][0][key] for key in effect}, effect)
+
+    def test_pipeline_1_exact_lookup_matches_fully_qualified_command(self):
+        self.reply({"commands": [{"command": "editor status", "name": "status", "group": "editor", "schema": {}}]})
+        result = m.handle("unity_pipeline_commands", {"command": "editor status"})
+        self.assertFalse(result.is_error)
+        self.assertEqual(json.loads(result)["commands"][0]["command"], "editor status")
+
+    def test_pipeline_1_command_failure_sets_mcp_error(self):
+        self.reply({"success": False, "error": "Command Execution Failed",
+                    "errorCode": "FAILED", "errorDetails": "test failed"})
+        result = m.handle("unity_pipeline", {"command": "test status"})
+        self.assertTrue(result.is_error)
+        payload = json.loads(result)
+        self.assertEqual(payload["errorCode"], "FAILED")
+        self.assertEqual(payload["errorDetails"], "test failed")
+
     def test_command_schema_and_compact_list(self):
         self.reply({"commands": [{"name": "editor_status", "parameters": []}, {"name": "eval"}]})
         result = m.handle("unity_pipeline_commands", {"command": "editor_status"})
@@ -215,7 +244,8 @@ class PipelineTests(unittest.TestCase):
             {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "unity_pipeline_job", "arguments": {"job": {}}}},
         ]
         process = subprocess.run([sys.executable, str(Path(m.__file__)), "--group=core"],
-            input="\n".join(json.dumps(v) for v in messages) + "\n", text=True, capture_output=True, timeout=10)
+            input="\n".join(json.dumps(v) for v in messages) + "\n", text=True,
+            encoding="utf-8", capture_output=True, timeout=10)
         self.assertEqual(process.returncode, 0, process.stderr)
         replies = {r["id"]: r for r in map(json.loads, process.stdout.splitlines())}
         tools = {t["name"]: t for t in replies[2]["result"]["tools"]}

@@ -9,7 +9,7 @@ namespace Framework.XYEditor.ShaderLibrary
     {
         public static void ShowWindow()
         {
-            var win = GetWindow<ShaderLibraryWindow>("Shader 库");
+            var win = GetWindow<ShaderLibraryWindow>("资源库");
             win.minSize = new Vector2(480, 600);
             win.Show();
         }

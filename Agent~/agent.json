@@ -1,8 +1,8 @@
 {
   "id": "xy-unity-agent",
   "name": "XY Unity 智能体",
-  "version": "1.1.0",
-  "additionalSkills": ["xy-unity-shader", "xy-agent-desktop-dev"],
+  "version": "1.1.5",
+  "additionalSkills": ["xy-unity-shader"],
   "description": "通过 Codex 与 XY MCP 完成 Unity 点位开发、诊断和验证。",
   "files": [
     "SKILL.md",
@@ -10,6 +10,7 @@
     "references/modules.md",
     "references/lifecycle-media.md",
     "references/interaction.md",
+    "references/uxr-gestures.md",
     "references/diagnostics-assets.md",
     "references/tools-verification.md",
     "references/solution-design.md",

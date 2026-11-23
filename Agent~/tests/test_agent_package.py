@@ -68,7 +68,7 @@ class PackageTests(unittest.TestCase):
         manifest = json.loads((ROOT / "agent.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["id"], "xy-unity-agent")
         self.assertEqual(len({w["id"] for w in manifest["workflows"]}), 6)
-        self.assertEqual(set(manifest["additionalSkills"]), {"xy-unity-shader", "xy-agent-desktop-dev"})
+        self.assertEqual(set(manifest["additionalSkills"]), {"xy-unity-shader"})
         profiles = [manifest] + [json.loads((ROOT / "profiles" / (name + ".json")).read_text(encoding="utf-8"))
                                  for name in manifest["additionalSkills"]]
         for profile in profiles:

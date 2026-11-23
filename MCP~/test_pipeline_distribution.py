@@ -82,6 +82,18 @@ class DistributionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             bundle_pipeline.build(source, self.root / "out", self.profile)
 
+    def test_checked_in_profile_targets_pipeline_1_0_1(self):
+        profile_path = Path(__file__).resolve().parents[1] / "Pipeline~" / "compatibility.json"
+        profile = json.loads(profile_path.read_text(encoding="utf-8-sig"))
+        self.assertEqual(profile["upstreamVersion"], "1.0.1")
+        self.assertEqual(profile["version"], "1.0.1-xy.1")
+        self.assertEqual(profile["unity"], "2022.3")
+        self.assertEqual(profile["validatedUnityVersions"], ["2022.3.53f1"])
+        self.assertEqual(
+            profile["upstreamArchiveSha256"],
+            "c4f60429683149ce5290d839f6d00980cd2eb367ceba34dcd2a825e53fac9e22",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

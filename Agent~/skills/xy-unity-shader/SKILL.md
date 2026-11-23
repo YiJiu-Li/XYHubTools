@@ -2,18 +2,26 @@
 name: xy-unity-shader
 description: 在 Unity 中实现或诊断 Shader Graph、HLSL 着色器、VFX/粒子、渲染 Pass、材质显示和 GPU 渲染性能。用于溶解、透明、特效、变体与合批问题；普通点位业务或纯 CPU/异步问题由 Unity 开发工作流处理。
 metadata:
-  version: "1.0.0"
+  version: "1.0.1"
 ---
 
 # XY Unity Shader / VFX
 
 ## 先确认当前渲染环境
 
-读取工程规则和实际工作区改动；存在 `.codegraph/` 时先用 CodeGraph 定位代码。确认 Unity、URP/HDRP/内置管线和 Shader Graph/VFX 包版本，当前 Graphics/Quality 使用的 Render Pipeline Asset、Renderer、目标平台、图形 API 与 XR 模式。不要把原始智能体文件中的版本表作为当前环境。
+读取工程规则和实际工作区改动；存在 `.codegraph/` 时先尝试 CodeGraph。工具或 CLI 不可用、索引明显过期、缺少目标符号或结果不足时，立即回退到源码和资源搜索，不要求先重建索引。
+
+按问题缩小环境检查：单个材质、透明或显示异常先看实际 Renderer、材质实例、Shader、必要 Pass 和当前渲染管线；涉及目标设备差异、XR、图形 API 兼容性或性能时，再检查目标平台、Graphics/Quality 配置、图形 API、XR 模式和性能基线。不要把完整平台盘点变成所有 Shader 任务的固定前置步骤。
 
 效果任务先检查现有材质、Shader、依赖纹理/网格和用户视觉目标。性能任务先确认是 CPU 提交、GPU 填充、带宽、过度绘制、变体还是资源问题，记录基线。能从工程读取的信息不再反复向用户询问。
 
 实现或评审前读取 [渲染实现与验证](references/rendering.md)。遵守当前项目命名和组织方式；SG_、VFX_ 仅适用于需要新建命名约定的项目，不强制重命名现有资产。
+
+## 与点位业务的交接
+
+- 症状涉及二次进入、退出后重进、按钮/手势触发、异步时序或材质参数是否重新赋值时，先由项目 `xy-unity-agent` 检查业务生命周期和目标实例。
+- 只有确认正确材质实例已收到预期参数但视觉仍错误，或问题可脱离点位生命周期稳定复现时，本专项主导 Shader Graph、VFX、Pass、材质和渲染状态排查。
+- 接手时沿用点位排查已经确认的对象、材质实例、属性值与复现阶段，不重新执行无关业务检查。
 
 ## 使用现有工具
 

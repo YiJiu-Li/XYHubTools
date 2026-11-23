@@ -7,14 +7,15 @@ XY 的 MCP 层通过官方 HTTP 接口发现和执行命令，不复制命令实
 
 - Unity 6 及以上：首次缺少 Pipeline 时，从 UPM 安装 `bundle.json` 中固定的
   `upstreamVersion`，保留官方包内容及版本声明。
-- Unity 2022.3：安装随附的 `pipeline.tgz` 兼容发行版。当前为 `0.8.0-xy.2`，
-  基于官方 `0.8.0-exp.1`，已验证 Unity `2022.3.53f1`。
+- Unity 2022.3：安装随附的 `pipeline.tgz` 兼容发行版。当前为 `1.0.1-xy.1`，
+  基于官方 `1.0.1`，已验证 Unity `2022.3.53f1`。
 - 已有安装：启动时不替换、不升级。状态显示安装来源和最低 Unity 版本提示。
 - 嵌入式源码包 `Packages/com.unity.pipeline` 优先于 UPM 引用。升级入口拒绝覆盖它；
   必须先备份并迁出源码，再选择安装路线。当前开发项目中的嵌入式包不受影响。
 
 不要仅通过降低官方包的 Unity 版本字段宣称兼容。2022 分支包含实际 API 适配：
-PhysicsMaterial 别名、材质队列读取、控制台访问、分析 API 占位及插件导入格式。
+PhysicsMaterial 别名、材质队列读取、控制台访问、分析 API 占位、插件导入格式，以及
+对 Unity 6 专属 Scene Preview 编辑器代码的版本隔离。
 其中旧版材质读取无法区分继承的渲染队列 `-1`，这是兼容分支的已知差异。
 
 ## 显式升级与回退
@@ -22,7 +23,7 @@ PhysicsMaterial 别名、材质队列读取、控制台访问、分析 API 占�
 官方路线可通过 Unity 编辑器 C# 调用：
 
 ```csharp
-XY.PipelineBootstrap.PipelineInstaller.InstallOfficialVersion("0.8.0-exp.1");
+XY.PipelineBootstrap.PipelineInstaller.InstallOfficialVersion("1.0.1");
 ```
 
 必须传完整版本，拒绝 `latest` 或范围；至少需要 Unity 6。具体新版本的更高 Unity
@@ -30,6 +31,20 @@ XY.PipelineBootstrap.PipelineInstaller.InstallOfficialVersion("0.8.0-exp.1");
 
 兼容路线使用菜单 `Tools > XY Hub > Pipeline > 升级到随附兼容版本`，或调用
 `PipelineInstaller.UpgradeBundledVersion()`。安装前核验包 SHA-256 和最低 Unity 版本。
+
+## Pipeline 1.0 协议
+
+1.0 使用分组命令名，例如 `editor status`、`test run` 和 `test status`；结构化参数使用
+kebab-case，例如 `output-path`。旧的 `editor_status`、`run_tests` 等无分组别名已删除。
+客户端应从 `/api/commands` 实时发现名称和 Schema，不静默猜测或转换未知命令。
+
+命令目录现在声明 effect，可区分只读、破坏性和幂等操作。调用层应原样保留这些标记，
+并继续遵守“修改请求超时后不自动重放”。1.0 还增强了测试结果、Profiler/内存诊断、
+Prefab 子物体引用和结构化字段编辑；1.0.1 修复了后台 Auto Tick 的 delayCall 频率。
+
+Build Profile、Multiplayer Role、Scene Preview 与部分 UI 捕获命令依赖 Unity 6 的专用
+API，不属于 2022.3 兼容发行版的支持承诺；它们即使出现在上游源码中也必须按实时
+Schema 和当前编辑器能力判断。
 
 切换已有 UPM 引用前，保存旧引用、manifest 和 packages-lock 到
 `ProjectSettings/XYBridgePipelineRollback/`。菜单“回退上次包切换”或
@@ -73,8 +88,8 @@ python Assets/XYHubTools/MCP~/verify_pipeline.py --project <已打开的隔离Un
 
 - `unity_pipeline_commands {}`：分类索引。
 - `unity_pipeline_commands {"tag":"assets","limit":20}`：精简列表，用 `nextOffset` 翻页。
-- `unity_pipeline_commands {"command":"create_asset"}`：完整官方参数规范。
-- `unity_pipeline {"command":"editor_status","job":true}`：提交后台任务。
+- `unity_pipeline_commands {"command":"asset create"}`：完整官方参数规范。
+- `unity_pipeline {"command":"editor status","job":true}`：提交后台任务。
 - `unity_pipeline_job {"job": <完整xyJob对象>}`：查询任务；加 `"action":"cancel"` 请求协作式取消，再查询终态。
 
 工程路径验证后保持绑定，HTTP 不再每次依赖命名管道。`unity_use_project` 支持绝对路径

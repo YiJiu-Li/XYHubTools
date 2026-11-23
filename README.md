@@ -78,9 +78,9 @@ XY 自有代码使用 MIT；随附 Pipeline 及第三方组件遵循各自许可
 
 ### XY Unity 智能体
 
-- 在 `XY Tools → AI → XY Unity 智能体` 或 Hub 的 AI 分类中使用。
+- 在 XY 编辑器 Hub 的 **AI** 分类中使用。
 - 内置点位开发、问题诊断、音视频、手势、资源检查和批量验证工作流。
-- 随包提供 Shader/VFX 与 Rust/Tauri/Vue 桌面 Agent 专项技能，按任务匹配，不自动换模型。
+- 随包提供 Shader/VFX 专项技能，按任务匹配，不自动换模型。
 - 一键安装工程级 Codex Skill，生成带当前工程、场景和选中对象的任务指令。
 - 复用现有 Codex 与 XY MCP；保留分析 / 修改范围，安装更新保护本地改动并备份旧版本。
 - 见 [智能体使用说明](Agent~/README.md)；原始对话不会随插件分发。
@@ -238,6 +238,13 @@ Hub 会自动发现所有实例：
 欢迎提交 Issue 和 Pull Request！
 
 ## 📝 更新日志
+
+### v2.2.0 (2026-11-23)
+- 📦 随附 Pipeline 升级为官方 `1.0.1` 的 Unity 2022.3 兼容分发版 `1.0.1-xy.1`
+- 🗂️ Shader 库升级为通用资源库，支持任意文本/二进制资源和 `/api/assets/*`
+- 🔗 首次导入前生成本地 GUID、保留 `.meta` 设置并修正内部引用，避免跨路径错误关联
+- 🤖 智能体精简为 Unity/Rokid 与 Shader/VFX 两项，补充点位资源隔离、动态挂载、Prefab 预建、UXR 手势和 Android 宏规则
+- 🧭 移除智能体独立菜单窗口，只保留 XY 编辑器 Hub 入口
 
 ### v2.1.0 (2026-10-23)
 - 🔍 **新增只读体检器 `unity_audit_module`**：Unity 采场景事实、Python 按 JSON 规则包求值，加规则不用重编译
